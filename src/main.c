@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
     *(last + 1) = 0;
 
     // Start app.
-    struct App app;
+    struct App app = { 0 };
     enum AppErr err;
 
     err = app_init(&app, path);

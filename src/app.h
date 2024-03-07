@@ -3,6 +3,7 @@
 
 enum AppErr {
     AppErr_None,
+    AppErr_Unspecified,
 };
 
 // Reify application.
@@ -11,6 +12,7 @@ struct App {
     GLFWwindow *window;
 
     // Vulkan stuff
+    VkInstance instance;
 };
 
 enum AppErr app_init(struct App *app, const char * const path);
