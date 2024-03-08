@@ -16,6 +16,9 @@ struct App {
     VkSurfaceKHR surface;
     VkDevice device;
     VkQueue graphics_queue, present_queue;
+    VkSwapchainKHR swapchain;
+    VkFormat swapchain_format;
+    VkExtent2D swapchain_extent;
 };
 
 enum AppErr app_init(struct App *app, const char * const path);

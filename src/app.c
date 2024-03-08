@@ -7,7 +7,10 @@
 
 int create_vk_instance(VkInstance *instance);
 int create_vk_device(VkInstance instance, VkSurfaceKHR surface, 
-        VkPhysicalDevice *pdevice, VkDevice *device, uint32_t *gqf, uint32_t *pqf);
+    VkPhysicalDevice *pdevice, VkDevice *device, uint32_t *gqf, uint32_t *pqf);
+int create_vk_swapchain(VkDevice device, VkPhysicalDevice pdevice, VkSurfaceKHR surface,
+    uint32_t gqf, uint32_t pqf, VkSwapchainKHR *swapchain, VkFormat *format,
+    VkExtent2D *extent);
 
 int app_is_init(struct App *app) {
     for (size_t i = 0; i < sizeof(*app); i++) {
@@ -59,6 +62,11 @@ enum AppErr app_init(struct App *app, const char *path) {
     // Extract vk queues.
     vkGetDeviceQueue(app->device, graphics_queue_family, 0, &app->graphics_queue);
     vkGetDeviceQueue(app->device, present_queue_family, 0, &app->present_queue);
+    
+    // Create swap chain.
+    result = create_vk_swapchain(app->device, physical_device, app->surface, graphics_queue_family, present_queue_family, &app->swapchain, &app->swapchain_format, &app->swapchain_extent);
+    if (result > 0)
+        return AppErr_Unspecified; // Error: could not create swapchain.
 
     return AppErr_None;
 }
@@ -68,6 +76,7 @@ enum AppErr app_run(struct App *app) {
 }
 
 enum AppErr app_free(struct App *app) {
+    vkDestroySwapchainKHR(app->device, app->swapchain, NULL);
     vkDestroySurfaceKHR(app->instance, app->surface, NULL);
     vkDestroyInstance(app->instance, NULL);
     glfwTerminate();
@@ -78,6 +87,9 @@ enum AppErr app_free(struct App *app) {
     app->surface = VK_NULL_HANDLE;
     app->device = VK_NULL_HANDLE;
     app->graphics_queue = app->present_queue = VK_NULL_HANDLE;
+    app->swapchain = VK_NULL_HANDLE;
+    memset(&app->swapchain_format, 0, sizeof(VkFormat));
+    memset(&app->swapchain_extent, 0, sizeof(VkExtent2D));
 
     return AppErr_None;
 }
@@ -306,6 +318,70 @@ int create_vk_device(VkInstance instance, VkSurfaceKHR surface, VkPhysicalDevice
     int make_p_device_result = vkCreateDevice(*physical_device, &device_create_info, NULL, device);
     if (make_p_device_result != VK_SUCCESS) return 5; // Could not create logical device.
     
+    return 0;
+}
+
+int create_vk_swapchain(VkDevice device, VkPhysicalDevice physical_device, VkSurfaceKHR surface, uint32_t graphics_queue_family, uint32_t present_queue_family, VkSwapchainKHR* swapchain, VkFormat* format, VkExtent2D *extent) {
+    if (device == VK_NULL_HANDLE) return 1;
+    if (physical_device == VK_NULL_HANDLE) return 1;
+    if (surface == VK_NULL_HANDLE) return 1;
+    if (format == NULL) return 1;
+    if (extent == NULL) return 1;
+    if (*swapchain != VK_NULL_HANDLE) return 1;
+
+    // Assume this format is supported by the physical device. 
+    VkSurfaceFormatKHR surface_format = {
+        .format = VK_FORMAT_B8G8R8_SRGB,
+        .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+    };
+
+    // Assume this present mode is supported by the physical device.
+    VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+
+    // Assume the swapchain extent is the size of the window.
+    extent->width = 800;
+    extent->height = 600;
+
+    //
+    VkSharingMode sharing_mode = (graphics_queue_family == present_queue_family)
+        ? VK_SHARING_MODE_EXCLUSIVE 
+        : VK_SHARING_MODE_CONCURRENT;
+    uint32_t queue_family_indices[] = {
+        [0] = graphics_queue_family,
+        [1] = present_queue_family,
+    };
+    
+    //
+    VkSurfaceCapabilitiesKHR capabilities;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &capabilities);
+
+    //
+    VkSwapchainCreateInfoKHR swapchain_create_info = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .surface = surface,
+        .minImageCount = capabilities.minImageCount + 1,
+        .imageFormat = surface_format.format,
+        .imageColorSpace = surface_format.colorSpace,
+        .imageExtent = *extent,
+        .imageArrayLayers = 1,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageSharingMode = sharing_mode,
+        .queueFamilyIndexCount = 2,
+        .pQueueFamilyIndices = queue_family_indices,
+        .preTransform = capabilities.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = present_mode,
+        .clipped = VK_TRUE,
+        .oldSwapchain = VK_NULL_HANDLE,
+    };
+
+    //
+    uint32_t make_sc_result = vkCreateSwapchainKHR(device, &swapchain_create_info, NULL, swapchain);
+    if (make_sc_result != VK_SUCCESS) return 2;
+
+    //
+    *format = surface_format.format;
+
     return 0;
 }
 
