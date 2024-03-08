@@ -9,17 +9,24 @@ int create_vk_instance(VkInstance *instance);
 int create_vk_device(VkInstance instance, VkSurfaceKHR surface, 
         VkPhysicalDevice *pdevice, VkDevice *device, uint32_t *gqf, uint32_t *pqf);
 
+int app_is_init(struct App *app) {
+    for (size_t i = 0; i < sizeof(*app); i++) {
+        if (((char*)app)[i] != 0) 
+            return 1;
+    }
+    return 0;
+}
+
 enum AppErr app_init(struct App *app, const char *path) {
     int result = 0; // Generic int for returns.
 
     // Check inputs.
     if (app == NULL || path == NULL)
-        return AppErr_Unspecified;
+        return AppErr_Unspecified; // Error: input error.
 
     // Check if app is zeroed.
-    for (size_t i = 0; i < sizeof(*app); i++) {
-        if (((char*)app)[i] != 0) 
-            return AppErr_Unspecified;
+    if (app_is_init(app) == 1) {
+        return AppErr_Unspecified; // Error: not in initialized state.
     }
    
     // Set up GLFW.
@@ -48,6 +55,10 @@ enum AppErr app_init(struct App *app, const char *path) {
     result = create_vk_device(app->instance, app->surface, &physical_device, &app->device, &graphics_queue_family, &present_queue_family);
     if (result != 0)
         return AppErr_Unspecified; // Error: could not create vulkan devuce.
+    
+    // Extract vk queues.
+    vkGetDeviceQueue(app->device, graphics_queue_family, 0, &app->graphics_queue);
+    vkGetDeviceQueue(app->device, present_queue_family, 0, &app->present_queue);
 
     return AppErr_None;
 }
@@ -57,7 +68,17 @@ enum AppErr app_run(struct App *app) {
 }
 
 enum AppErr app_free(struct App *app) {
+    vkDestroySurfaceKHR(app->instance, app->surface, NULL);
+    vkDestroyInstance(app->instance, NULL);
     glfwTerminate();
+
+    // Zero struct.
+    app->window = NULL;
+    app->instance = VK_NULL_HANDLE;
+    app->surface = VK_NULL_HANDLE;
+    app->device = VK_NULL_HANDLE;
+    app->graphics_queue = app->present_queue = VK_NULL_HANDLE;
+
     return AppErr_None;
 }
 

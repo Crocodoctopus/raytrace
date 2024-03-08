@@ -42,4 +42,5 @@ int main(int argc, char *argv[]) {
 
     err = app_free(&app);
     assert(err == AppErr_None);
+    assert(app_is_init(&app) == 0);
 }
