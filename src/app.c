@@ -34,6 +34,11 @@ enum AppErr app_init(struct App *app, const char *path) {
     if (result > 0)
         return AppErr_Unspecified;
 
+    // Create vulkan surface though GLFW.
+    result = glfwCreateWindowSurface(app->instance, app->window, NULL, &app->surface);
+    if (result != 0)
+        return AppErr_Unspecified; // Error: could not create vulkan surface.
+
     return AppErr_None;
 }
 

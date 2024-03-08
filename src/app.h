@@ -13,6 +13,7 @@ struct App {
 
     // Vulkan stuff
     VkInstance instance;
+    VkSurfaceKHR surface;
 };
 
 enum AppErr app_init(struct App *app, const char * const path);
