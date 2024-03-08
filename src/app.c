@@ -6,11 +6,20 @@
 #include "app.h"
 
 int create_vk_instance(VkInstance *instance);
-int create_vk_device(VkInstance instance, VkSurfaceKHR surface, 
-    VkPhysicalDevice *pdevice, VkDevice *device, uint32_t *gqf, uint32_t *pqf);
-int create_vk_swapchain(VkDevice device, VkPhysicalDevice pdevice, VkSurfaceKHR surface,
-    uint32_t gqf, uint32_t pqf, VkSwapchainKHR *swapchain, VkFormat *format,
-    VkExtent2D *extent);
+int create_vk_device(
+        VkInstance instance, 
+        VkSurfaceKHR surface, 
+        VkPhysicalDevice *pdevice, 
+        VkDevice *device, 
+        uint32_t *gqf, uint32_t *pqf);
+int create_vk_swapchain(
+        VkDevice device, 
+        VkPhysicalDevice pdevice, 
+        VkSurfaceKHR surface, 
+        uint32_t gqf, uint32_t pqf, 
+        VkSwapchainKHR *swapchain, 
+        VkFormat *format, 
+        VkExtent2D *extent);
 
 int app_is_init(struct App *app) {
     for (size_t i = 0; i < sizeof(*app); i++) {
@@ -254,7 +263,13 @@ int find_graphics_queue_family(VkPhysicalDevice device, uint32_t *graphics_queue
     return (i == queue_family_n) ? 2 : 0;
 }
 
-int create_vk_device(VkInstance instance, VkSurfaceKHR surface, VkPhysicalDevice *physical_device, VkDevice *device, uint32_t *graphics_queue_family, uint32_t *present_queue_family) {
+int create_vk_device(
+        VkInstance instance, 
+        VkSurfaceKHR surface, 
+        VkPhysicalDevice *physical_device, 
+        VkDevice *device, 
+        uint32_t *graphics_queue_family, 
+        uint32_t *present_queue_family) {
     if (*physical_device != VK_NULL_HANDLE) return 1;
     if (instance == VK_NULL_HANDLE) return 1;
     if (*device != VK_NULL_HANDLE) return 1;
@@ -321,7 +336,15 @@ int create_vk_device(VkInstance instance, VkSurfaceKHR surface, VkPhysicalDevice
     return 0;
 }
 
-int create_vk_swapchain(VkDevice device, VkPhysicalDevice physical_device, VkSurfaceKHR surface, uint32_t graphics_queue_family, uint32_t present_queue_family, VkSwapchainKHR* swapchain, VkFormat* format, VkExtent2D *extent) {
+int create_vk_swapchain(
+        VkDevice device, 
+        VkPhysicalDevice physical_device, 
+        VkSurfaceKHR surface, 
+        uint32_t graphics_queue_family, 
+        uint32_t present_queue_family, 
+        VkSwapchainKHR* swapchain, 
+        VkFormat* format, 
+        VkExtent2D *extent) {
     if (device == VK_NULL_HANDLE) return 1;
     if (physical_device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
