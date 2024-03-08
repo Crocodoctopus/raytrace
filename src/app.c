@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <vulkan/vulkan_core.h>
 #include "app.h"
 
 int create_vk_instance(VkInstance *instance);
@@ -20,6 +21,12 @@ int create_vk_swapchain(
         VkSwapchainKHR *swapchain, 
         VkFormat *format, 
         VkExtent2D *extent);
+int create_vk_image_views(
+        VkDevice device, 
+        int n, 
+        VkImage *images, 
+        VkFormat format, 
+        VkImageView *image_views);
 
 int app_is_init(struct App *app) {
     for (size_t i = 0; i < sizeof(*app); i++) {
@@ -64,7 +71,13 @@ enum AppErr app_init(struct App *app, const char *path) {
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     uint32_t graphics_queue_family = -1;
     uint32_t present_queue_family = -1;
-    result = create_vk_device(app->instance, app->surface, &physical_device, &app->device, &graphics_queue_family, &present_queue_family);
+    result = create_vk_device(
+            app->instance, 
+            app->surface, 
+            &physical_device, 
+            &app->device, 
+            &graphics_queue_family, 
+            &present_queue_family);
     if (result != 0)
         return AppErr_Unspecified; // Error: could not create vulkan devuce.
     
@@ -73,18 +86,52 @@ enum AppErr app_init(struct App *app, const char *path) {
     vkGetDeviceQueue(app->device, present_queue_family, 0, &app->present_queue);
     
     // Create swap chain.
-    result = create_vk_swapchain(app->device, physical_device, app->surface, graphics_queue_family, present_queue_family, &app->swapchain, &app->swapchain_format, &app->swapchain_extent);
+    result = create_vk_swapchain(
+            app->device, 
+            physical_device, 
+            app->surface, 
+            graphics_queue_family, 
+            present_queue_family, 
+            &app->swapchain, 
+            &app->swapchain_format, 
+            &app->swapchain_extent);
     if (result > 0)
         return AppErr_Unspecified; // Error: could not create swapchain.
+
+    // Extract swapchain images.
+    vkGetSwapchainImagesKHR(app->device, app->swapchain, &app->swapchain_images_n, NULL);
+    app->swapchain_images = malloc(app->swapchain_images_n * sizeof(VkImage));
+    vkGetSwapchainImagesKHR(
+            app->device, 
+            app->swapchain, 
+            &app->swapchain_images_n, 
+            app->swapchain_images);
+    app->swapchain_image_views = malloc(app->swapchain_images_n * sizeof(VkImageView));
+    result = create_vk_image_views(
+            app->device, 
+            app->swapchain_images_n, 
+            app->swapchain_images, 
+            app->swapchain_format, 
+            app->swapchain_image_views); 
+    if (result > 0)
+        return AppErr_Unspecified;
 
     return AppErr_None;
 }
 
 enum AppErr app_run(struct App *app) {
+    while(!glfwWindowShouldClose(app->window)) {
+        glfwPollEvents();
+    }
+
     return AppErr_None;
 }
 
 enum AppErr app_free(struct App *app) {
+    for (int i = 0; i < app->swapchain_images_n; i++)
+        vkDestroyImageView(app->device, app->swapchain_image_views[i], NULL);
+    free(app->swapchain_image_views);
+    free(app->swapchain_images);
     vkDestroySwapchainKHR(app->device, app->swapchain, NULL);
     vkDestroySurfaceKHR(app->instance, app->surface, NULL);
     vkDestroyInstance(app->instance, NULL);
@@ -99,6 +146,9 @@ enum AppErr app_free(struct App *app) {
     app->swapchain = VK_NULL_HANDLE;
     memset(&app->swapchain_format, 0, sizeof(VkFormat));
     memset(&app->swapchain_extent, 0, sizeof(VkExtent2D));
+    app->swapchain_images_n = 0;
+    app->swapchain_images = NULL;
+    app->swapchain_image_views = NULL;
 
     return AppErr_None;
 }
@@ -212,7 +262,10 @@ int create_vk_instance(VkInstance *instance) {
     return 0;
 }
 
-int find_present_queue_family(VkPhysicalDevice device, VkSurfaceKHR surface, uint32_t *present_queue_family) {
+int find_present_queue_family(
+        VkPhysicalDevice device, 
+        VkSurfaceKHR surface, 
+        uint32_t *present_queue_family) {
     if (device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
     if (present_queue_family == NULL) return 1;
@@ -406,5 +459,53 @@ int create_vk_swapchain(
     *format = surface_format.format;
 
     return 0;
+}
+
+int create_vk_image_views(
+        VkDevice device, 
+        int n, 
+        VkImage *images, 
+        VkFormat format, 
+        VkImageView *image_views) {
+    if (device == VK_NULL_HANDLE) return 1;
+    if (images == NULL) return 1;
+    if (n == 0) return 1;
+    if (image_views == NULL) return 1;
+
+    int res = 0;
+
+    int i = 0;
+    for (; i < n; i++) {
+        VkImageViewCreateInfo create_info = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = images[i],
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = format,
+            .components = {
+                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        uint32_t make_iv_result = vkCreateImageView(device, &create_info, NULL, image_views + i);
+        if (make_iv_result != VK_SUCCESS) {
+            res = 1;
+            goto fail;
+        }
+    }
+
+    return 0;
+fail:
+    for (int j = 0; j < i; j++) vkDestroyImageView(device, image_views[j], NULL); 
+    return res;
 }
 
