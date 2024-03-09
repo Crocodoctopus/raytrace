@@ -2,8 +2,19 @@
 #include <GLFW/glfw3.h>
 
 enum AppErr {
-    AppErr_None,
+    AppErr_None = 0,
     AppErr_Unspecified,
+
+    AppErr_InvalidInput,
+    AppErr_NotUninit,
+    AppErr_InitWindowErr,
+    AppErr_InitVkInstanceErr,
+    AppErr_InitVkSurfaceErr,
+    AppErr_InitVkDeviceErr,
+    AppErr_InitVkSwapchainErr,
+    AppErr_InitVkImageViewErr,
+    AppErr_InitVkRenderPassErr,
+    AppErr_InitVkGraphicsPipelineErr,
 };
 
 // Reify application.
@@ -23,6 +34,8 @@ struct App {
     VkImage *swapchain_images; // array with size of swapchain_images_n
     VkImageView *swapchain_image_views; // array with size of swapchain_images_n
     VkRenderPass render_pass;
+    VkPipelineLayout pipeline_layout;
+    VkPipeline pipeline;
 };
 
 enum AppErr app_init(struct App *app, const char * const path);

@@ -30,6 +30,12 @@ int create_vk_image_views(
         VkFormat format, 
         VkImageView *image_views);
 int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render_pass);
+int create_graphics_pipeline(
+        VkDevice device, 
+        VkRenderPass render_pass, 
+        const char * const path, 
+        VkPipelineLayout *pipeline_layout, 
+        VkPipeline *pipeline);
 
 int app_is_init(struct App *app) {
     for (size_t i = 0; i < sizeof(*app); i++) {
@@ -44,11 +50,11 @@ enum AppErr app_init(struct App *app, const char *path) {
 
     // Check inputs.
     if (app == NULL || path == NULL)
-        return AppErr_Unspecified; // Error: input error.
+        return AppErr_InvalidInput; // Error: input error.
 
     // Check if app is zeroed.
     if (app_is_init(app) == 1) {
-        return AppErr_Unspecified; // Error: not in initialized state.
+        return AppErr_NotUninit; // Error: not in initialized state.
     }
    
     // Set up GLFW.
@@ -58,17 +64,17 @@ enum AppErr app_init(struct App *app, const char *path) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     app->window = glfwCreateWindow(800, 600, "Raytrace", NULL, NULL);
     if (app->window == NULL)
-        return AppErr_Unspecified; // Error: could not create GLFW window.
+        return AppErr_InitWindowErr; // Error: could not create GLFW window.
 
     // Create vulkan instance
     result = create_vk_instance(&app->instance);
     if (result > 0)
-        return AppErr_Unspecified; // Error: could not initialize vulkan instance.
+        return AppErr_InitVkInstanceErr; // Error: could not initialize vulkan instance.
 
     // Create vulkan surface though GLFW.
     result = glfwCreateWindowSurface(app->instance, app->window, NULL, &app->surface);
     if (result > 0)
-        return AppErr_Unspecified; // Error: could not create vulkan surface.
+        return AppErr_InitVkSurfaceErr; // Error: could not create vulkan surface.
 
     // Create vulkan device.
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -82,7 +88,7 @@ enum AppErr app_init(struct App *app, const char *path) {
             &graphics_queue_family, 
             &present_queue_family);
     if (result > 0)
-        return AppErr_Unspecified; // Error: could not create vulkan devuce.
+        return AppErr_InitVkDeviceErr; // Error: could not create vulkan devuce.
     
     // Extract vk queues.
     vkGetDeviceQueue(app->device, graphics_queue_family, 0, &app->graphics_queue);
@@ -99,7 +105,7 @@ enum AppErr app_init(struct App *app, const char *path) {
             &app->swapchain_format, 
             &app->swapchain_extent);
     if (result > 0)
-        return AppErr_Unspecified; // Error: could not create swapchain.
+        return AppErr_InitVkSwapchainErr; // Error: could not create swapchain.
 
     // Extract swapchain images.
     vkGetSwapchainImagesKHR(app->device, app->swapchain, &app->swapchain_images_n, NULL);
@@ -117,13 +123,24 @@ enum AppErr app_init(struct App *app, const char *path) {
             app->swapchain_format, 
             app->swapchain_image_views); 
     if (result > 0)
-        return AppErr_Unspecified; // Error: could not create swapchain images.
+        return AppErr_InitVkImageViewErr; // Error: could not create swapchain images.
     
     // Create render pass.
     result = create_vk_render_pass(app->device, app->swapchain_format, &app->render_pass);
     if (result > 0)
-        return AppErr_Unspecified; // Error: could not create render pass.
+        return AppErr_InitVkRenderPassErr; // Error: could not create render pass.
 
+    // 
+/*
+    result = create_graphics_pipeline(
+            app->device, 
+            app->render_pass, 
+            path, 
+            &app->pipeline_layout, 
+            &app->pipeline);
+    if (result > 0)
+        return AppErr_InitVkGraphicsPipelineErr; // Error: could not create graphics pipeline.
+*/
     return AppErr_None;
 }
 
@@ -136,6 +153,8 @@ enum AppErr app_run(struct App *app) {
 }
 
 enum AppErr app_free(struct App *app) {
+    vkDestroyPipeline(app->device, app->pipeline, NULL);
+    vkDestroyPipelineLayout(app->device, app->pipeline_layout, NULL);
     vkDestroyRenderPass(app->device, app->render_pass, NULL);
     for (int i = 0; i < app->swapchain_images_n; i++)
         vkDestroyImageView(app->device, app->swapchain_image_views[i], NULL);
@@ -159,6 +178,8 @@ enum AppErr app_free(struct App *app) {
     app->swapchain_images = NULL;
     app->swapchain_image_views = NULL;
     app->render_pass = VK_NULL_HANDLE;
+    app->pipeline_layout = VK_NULL_HANDLE;
+    app->pipeline = VK_NULL_HANDLE;
 
     return AppErr_None;
 }
@@ -563,5 +584,178 @@ int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render
         return 2;
 
     return 0;
+}
+
+int create_graphics_pipeline(
+        VkDevice device, 
+        VkRenderPass render_pass, 
+        const char * const path, 
+        VkPipelineLayout *pipeline_layout, 
+        VkPipeline *pipeline) {
+    if (device == VK_NULL_HANDLE) return 1;
+    if (render_pass == VK_NULL_HANDLE) return 1;
+    if (path == NULL) return 1;
+    if (pipeline_layout == NULL) return 1;
+    if (*pipeline_layout != VK_NULL_HANDLE) return 1;
+    if (pipeline == NULL) return 1;
+    if (*pipeline != VK_NULL_HANDLE) return 1;
+
+    int res = 0;
+
+    // Create two shader modules.
+    VkShaderModule shader_modules[2] = { VK_NULL_HANDLE };
+    char *shader_names[] = {
+        "tri.vert.spv",
+        "tri.frag.spv",
+    };
+    for (int i = 0; i < 2; i++) {
+        // Create shader path.
+        char shader_path[256];
+        strcpy(shader_path, path);
+        strcat(shader_path, shader_names[i]);
+
+        // Extract shader bytecode from file.
+        FILE *file = fopen(shader_path, "r");
+        if (file == NULL) return 2;
+        fseek(file, 0, SEEK_END);
+        int size = ftell(file);
+        rewind(file);
+        char *shader = malloc(size);
+        fgets(shader, size, file);
+        fclose(file);
+
+        //
+        VkShaderModuleCreateInfo shader_create_info = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = size,
+            .pCode = (uint32_t*)shader,
+        };
+
+        //
+        uint32_t make_shader_result = vkCreateShaderModule(device, &shader_create_info, NULL, shader_modules + i);
+        if (make_shader_result != VK_SUCCESS) {
+            res = 4;
+            goto fail;
+        }
+    }
+
+    // 
+    VkPipelineVertexInputStateCreateInfo vertex_input_create_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 0,
+        .vertexAttributeDescriptionCount = 0,
+    };
+
+    //
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_create_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE,
+    };
+
+    //
+    VkViewport viewport = {
+        .x = 0.0,
+        .y = 0.0,
+        .width = 800,
+        .height = 600,
+        .minDepth = 0.0,
+        .maxDepth = 1.0,
+    };
+
+    //
+    VkRect2D scissor = {
+        .offset = { .x = 0, .y = 0 },
+        .extent = { .width = 800, .height = 600 },
+    };
+
+    //
+    VkPipelineViewportStateCreateInfo viewport_state_create_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor,
+    };
+
+    //
+    VkPipelineRasterizationStateCreateInfo rasterization_create_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth = 1.0,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+    };
+
+    //
+    /*
+     * VkPipelineMultisampleStateCreateInfo multisample_create_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .sampleShadingEnable = VK_FALSE,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+    };
+
+    //
+    VkPipelineColorBlendAttachmentState color_blend_state = {
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        .blendEnable = VK_FALSE,
+    };
+    VkPipelineColorBlendStateCreateInfo color_blend_state_create_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = VK_FALSE,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_state,
+    };
+    */
+
+    //
+    VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+    };
+    int make_pl_result = vkCreatePipelineLayout(device, &pipeline_layout_create_info, NULL, pipeline_layout);
+    if (make_pl_result != VK_SUCCESS) {
+        res = 2;
+        goto fail;
+    }
+
+    //
+    VkGraphicsPipelineCreateInfo pipeline_create_info = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        //.pStages = 
+        .pVertexInputState = &vertex_input_create_info,
+        .pInputAssemblyState = &input_assembly_create_info,
+        .pViewportState = &viewport_state_create_info,
+        .pRasterizationState = &rasterization_create_info,
+        .pMultisampleState = NULL,
+        .pDepthStencilState = NULL,
+        .pColorBlendState = NULL, 
+        .pDynamicState = NULL,
+        .layout = *pipeline_layout,
+        .renderPass = render_pass,
+        .subpass = 0,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = -1,
+    };
+
+    //
+    int make_pipeline_result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_create_info, NULL, pipeline);
+    if (make_pipeline_result != VK_SUCCESS) {
+        res = 3;
+        goto fail;
+    }
+
+    return res;
+fail:
+    vkDestroyPipeline(device, *pipeline, NULL);
+    vkDestroyPipelineLayout(device, *pipeline_layout, NULL);
+    vkDestroyShaderModule(device, shader_modules[0], NULL);
+    vkDestroyShaderModule(device, shader_modules[1], NULL);
+    *pipeline = VK_NULL_HANDLE; 
+    *pipeline_layout = VK_NULL_HANDLE;
+    return res;
 }
 

@@ -35,7 +35,10 @@ int main(int argc, char *argv[]) {
     enum AppErr err;
 
     err = app_init(&app, path);
-    assert(err == AppErr_None);
+    if (err != AppErr_None) {
+        printf("%i\n", err);
+        return -1;
+    }
 
     err = app_run(&app);
     assert(err == AppErr_None);
