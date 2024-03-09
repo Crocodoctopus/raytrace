@@ -6,6 +6,8 @@
 #include <vulkan/vulkan_core.h>
 #include "app.h"
 
+#include <stdio.h>
+
 int create_vk_instance(VkInstance *instance);
 int create_vk_device(
         VkInstance instance, 
@@ -64,7 +66,7 @@ enum AppErr app_init(struct App *app, const char *path) {
 
     // Create vulkan surface though GLFW.
     result = glfwCreateWindowSurface(app->instance, app->window, NULL, &app->surface);
-    if (result != 0)
+    if (result > 0)
         return AppErr_Unspecified; // Error: could not create vulkan surface.
 
     // Create vulkan device.
@@ -78,7 +80,7 @@ enum AppErr app_init(struct App *app, const char *path) {
             &app->device, 
             &graphics_queue_family, 
             &present_queue_family);
-    if (result != 0)
+    if (result > 0)
         return AppErr_Unspecified; // Error: could not create vulkan devuce.
     
     // Extract vk queues.
@@ -100,13 +102,13 @@ enum AppErr app_init(struct App *app, const char *path) {
 
     // Extract swapchain images.
     vkGetSwapchainImagesKHR(app->device, app->swapchain, &app->swapchain_images_n, NULL);
-    app->swapchain_images = malloc(app->swapchain_images_n * sizeof(VkImage));
+    app->swapchain_images = calloc(app->swapchain_images_n, sizeof(VkImage));
     vkGetSwapchainImagesKHR(
             app->device, 
             app->swapchain, 
             &app->swapchain_images_n, 
             app->swapchain_images);
-    app->swapchain_image_views = malloc(app->swapchain_images_n * sizeof(VkImageView));
+    app->swapchain_image_views = calloc(app->swapchain_images_n, sizeof(VkImageView));
     result = create_vk_image_views(
             app->device, 
             app->swapchain_images_n, 
@@ -395,14 +397,15 @@ int create_vk_swapchain(
         VkSurfaceKHR surface, 
         uint32_t graphics_queue_family, 
         uint32_t present_queue_family, 
-        VkSwapchainKHR* swapchain, 
-        VkFormat* format, 
+        VkSwapchainKHR *swapchain, 
+        VkFormat *format, 
         VkExtent2D *extent) {
     if (device == VK_NULL_HANDLE) return 1;
     if (physical_device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
     if (format == NULL) return 1;
     if (extent == NULL) return 1;
+    if (swapchain == NULL) return 1;
     if (*swapchain != VK_NULL_HANDLE) return 1;
 
     // Assume this format is supported by the physical device. 
@@ -471,11 +474,11 @@ int create_vk_image_views(
     if (images == NULL) return 1;
     if (n == 0) return 1;
     if (image_views == NULL) return 1;
+    for (int i = 0; i < n; i++)
+        if (images[i] == VK_NULL_HANDLE || image_views[i] != VK_NULL_HANDLE)
+            return 1;
 
-    int res = 0;
-
-    int i = 0;
-    for (; i < n; i++) {
+    for (int i = 0; i < n; i++) {
         VkImageViewCreateInfo create_info = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image = images[i],
@@ -497,15 +500,10 @@ int create_vk_image_views(
         };
 
         uint32_t make_iv_result = vkCreateImageView(device, &create_info, NULL, image_views + i);
-        if (make_iv_result != VK_SUCCESS) {
-            res = 1;
-            goto fail;
-        }
+        if (make_iv_result != VK_SUCCESS)
+            return 1;
     }
 
     return 0;
-fail:
-    for (int j = 0; j < i; j++) vkDestroyImageView(device, image_views[j], NULL); 
-    return res;
 }
 
