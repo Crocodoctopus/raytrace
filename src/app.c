@@ -223,6 +223,7 @@ continue_outer:;
 }
 
 int create_vk_instance(VkInstance *instance) {
+    if (instance == NULL) return 1;
     if (*instance != VK_NULL_HANDLE) return 1;
 
     VkApplicationInfo app_info = {
@@ -325,8 +326,11 @@ int create_vk_device(
         VkDevice *device, 
         uint32_t *graphics_queue_family, 
         uint32_t *present_queue_family) {
-    if (*physical_device != VK_NULL_HANDLE) return 1;
     if (instance == VK_NULL_HANDLE) return 1;
+    if (surface == VK_NULL_HANDLE) return 1;
+    if (physical_device == NULL) return 1;
+    if (*physical_device != VK_NULL_HANDLE) return 1;
+    if (device == NULL) return 1;
     if (*device != VK_NULL_HANDLE) return 1;
 
     // Take first physical device.
@@ -403,10 +407,10 @@ int create_vk_swapchain(
     if (device == VK_NULL_HANDLE) return 1;
     if (physical_device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
-    if (format == NULL) return 1;
-    if (extent == NULL) return 1;
     if (swapchain == NULL) return 1;
     if (*swapchain != VK_NULL_HANDLE) return 1;
+    if (format == NULL) return 1;
+    if (extent == NULL) return 1;
 
     // Assume this format is supported by the physical device. 
     VkSurfaceFormatKHR surface_format = {
