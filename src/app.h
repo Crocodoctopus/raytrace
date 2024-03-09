@@ -22,6 +22,7 @@ struct App {
     uint32_t swapchain_images_n;
     VkImage *swapchain_images; // array with size of swapchain_images_n
     VkImageView *swapchain_image_views; // array with size of swapchain_images_n
+    VkRenderPass render_pass;
 };
 
 enum AppErr app_init(struct App *app, const char * const path);

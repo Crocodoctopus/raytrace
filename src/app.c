@@ -29,6 +29,7 @@ int create_vk_image_views(
         VkImage *images, 
         VkFormat format, 
         VkImageView *image_views);
+int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render_pass);
 
 int app_is_init(struct App *app) {
     for (size_t i = 0; i < sizeof(*app); i++) {
@@ -116,7 +117,12 @@ enum AppErr app_init(struct App *app, const char *path) {
             app->swapchain_format, 
             app->swapchain_image_views); 
     if (result > 0)
-        return AppErr_Unspecified;
+        return AppErr_Unspecified; // Error: could not create swapchain images.
+    
+    // Create render pass.
+    result = create_vk_render_pass(app->device, app->swapchain_format, &app->render_pass);
+    if (result > 0)
+        return AppErr_Unspecified; // Error: could not create render pass.
 
     return AppErr_None;
 }
@@ -130,6 +136,7 @@ enum AppErr app_run(struct App *app) {
 }
 
 enum AppErr app_free(struct App *app) {
+    vkDestroyRenderPass(app->device, app->render_pass, NULL);
     for (int i = 0; i < app->swapchain_images_n; i++)
         vkDestroyImageView(app->device, app->swapchain_image_views[i], NULL);
     free(app->swapchain_image_views);
@@ -151,6 +158,7 @@ enum AppErr app_free(struct App *app) {
     app->swapchain_images_n = 0;
     app->swapchain_images = NULL;
     app->swapchain_image_views = NULL;
+    app->render_pass = VK_NULL_HANDLE;
 
     return AppErr_None;
 }
@@ -507,6 +515,52 @@ int create_vk_image_views(
         if (make_iv_result != VK_SUCCESS)
             return 1;
     }
+
+    return 0;
+}
+
+int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render_pass) {
+    if (device == VK_NULL_HANDLE) return 1;
+    if (render_pass == NULL) return 1;
+    if (*render_pass != VK_NULL_HANDLE) return 1;
+
+    //
+    VkAttachmentDescription color_attachment = {
+        .format = format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    };
+
+    //
+    VkAttachmentReference attachment_ref = {
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    //
+    VkSubpassDescription subpass_desc = {
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &attachment_ref,
+    };
+
+    //
+    VkRenderPassCreateInfo render_pass_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &color_attachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass_desc,
+    };
+
+    //
+    int make_rp_result = vkCreateRenderPass(device, &render_pass_info, NULL, render_pass);
+    if (make_rp_result != VK_SUCCESS) 
+        return 2;
 
     return 0;
 }
