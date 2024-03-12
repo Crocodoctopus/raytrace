@@ -3,10 +3,12 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <vulkan/vulkan_core.h>
 #include "app.h"
+#include "util.h"
 
 #include <stdio.h>
+#include <vulkan/vulkan_core.h>
+#include <assert.h>
 
 int create_vk_instance(VkInstance *instance);
 int create_vk_device(
@@ -15,10 +17,19 @@ int create_vk_device(
         VkPhysicalDevice *pdevice, 
         VkDevice *device, 
         uint32_t *gqf, uint32_t *pqf);
+int query_device_swapchain_support(
+        VkPhysicalDevice physical_device,
+        VkSurfaceKHR surface,
+        VkSurfaceCapabilitiesKHR *capabilities,
+        uint32_t *formats_n,
+        VkSurfaceFormatKHR **formats,
+        uint32_t *present_modes_n,
+        VkPresentModeKHR **present_modes); 
 int create_vk_swapchain(
         VkDevice device, 
         VkPhysicalDevice pdevice, 
         VkSurfaceKHR surface, 
+        const struct SwapchainSupportDetails *details,
         uint32_t gqf, uint32_t pqf, 
         VkSwapchainKHR *swapchain, 
         VkFormat *format, 
@@ -30,6 +41,12 @@ int create_vk_image_views(
         VkFormat format, 
         VkImageView *image_views);
 int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render_pass);
+int create_shader_modules(
+        VkDevice device,
+        const char *path,
+        uint32_t shaders_n,
+        const char **shader_names,
+        VkShaderModule *shader_modules);
 int create_graphics_pipeline(
         VkDevice device, 
         VkRenderPass render_pass, 
@@ -37,44 +54,37 @@ int create_graphics_pipeline(
         VkPipelineLayout *pipeline_layout, 
         VkPipeline *pipeline);
 
-int app_is_init(struct App *app) {
-    for (size_t i = 0; i < sizeof(*app); i++) {
-        if (((char*)app)[i] != 0) 
-            return 1;
-    }
-    return 0;
-}
-
 enum AppErr app_init(struct App *app, const char *path) {
     int result = 0; // Generic int for returns.
 
     // Check inputs.
     if (app == NULL || path == NULL)
-        return AppErr_InvalidInput; // Error: input error.
+        return AppErr_InvalidInput;
 
     // Check if app is zeroed.
-    if (app_is_init(app) == 1) {
-        return AppErr_NotUninit; // Error: not in initialized state.
+    if (!memcheck(app, 0, sizeof(*app))) {
+        return AppErr_NotUninit;
     }
    
     // Set up GLFW.
     int glfw_status = glfwInit();
     if (glfw_status == GLFW_FALSE)
-        return AppErr_Unspecified; // Error: could not intialize GLFW.
+        return AppErr_GlfwInitErr;
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     app->window = glfwCreateWindow(800, 600, "Raytrace", NULL, NULL);
     if (app->window == NULL)
-        return AppErr_InitWindowErr; // Error: could not create GLFW window.
+        return AppErr_InitWindowErr;
 
     // Create vulkan instance
     result = create_vk_instance(&app->instance);
     if (result > 0)
-        return AppErr_InitVkInstanceErr; // Error: could not initialize vulkan instance.
+        return AppErr_InitVkInstanceErr;
 
     // Create vulkan surface though GLFW.
     result = glfwCreateWindowSurface(app->instance, app->window, NULL, &app->surface);
     if (result > 0)
-        return AppErr_InitVkSurfaceErr; // Error: could not create vulkan surface.
+        return AppErr_InitVkSurfaceErr;
 
     // Create vulkan device.
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -88,24 +98,29 @@ enum AppErr app_init(struct App *app, const char *path) {
             &graphics_queue_family, 
             &present_queue_family);
     if (result > 0)
-        return AppErr_InitVkDeviceErr; // Error: could not create vulkan devuce.
+        return AppErr_InitVkDeviceErr;
     
     // Extract vk queues.
     vkGetDeviceQueue(app->device, graphics_queue_family, 0, &app->graphics_queue);
     vkGetDeviceQueue(app->device, present_queue_family, 0, &app->present_queue);
-    
-    // Create swap chain.
+  
+    // Query physical device for swapchain support details.
+    result = swapchain_support_details_init(&app->swapchain_support, physical_device, app->surface);
+    assert(result == 0); // Only way this can fail is via an input error.
+
+    // Create swapchain.
     result = create_vk_swapchain(
             app->device, 
             physical_device, 
             app->surface, 
+            &app->swapchain_support,
             graphics_queue_family, 
             present_queue_family, 
             &app->swapchain, 
             &app->swapchain_format, 
             &app->swapchain_extent);
     if (result > 0)
-        return AppErr_InitVkSwapchainErr; // Error: could not create swapchain.
+        return AppErr_InitVkSwapchainErr;
 
     // Extract swapchain images.
     vkGetSwapchainImagesKHR(app->device, app->swapchain, &app->swapchain_images_n, NULL);
@@ -123,15 +138,14 @@ enum AppErr app_init(struct App *app, const char *path) {
             app->swapchain_format, 
             app->swapchain_image_views); 
     if (result > 0)
-        return AppErr_InitVkImageViewErr; // Error: could not create swapchain images.
+        return AppErr_InitVkImageViewErr; 
     
     // Create render pass.
     result = create_vk_render_pass(app->device, app->swapchain_format, &app->render_pass);
     if (result > 0)
-        return AppErr_InitVkRenderPassErr; // Error: could not create render pass.
+        return AppErr_InitVkRenderPassErr;
 
     // 
-/*
     result = create_graphics_pipeline(
             app->device, 
             app->render_pass, 
@@ -139,8 +153,8 @@ enum AppErr app_init(struct App *app, const char *path) {
             &app->pipeline_layout, 
             &app->pipeline);
     if (result > 0)
-        return AppErr_InitVkGraphicsPipelineErr; // Error: could not create graphics pipeline.
-*/
+        return AppErr_InitVkGraphicsPipelineErr;
+
     return AppErr_None;
 }
 
@@ -153,39 +167,59 @@ enum AppErr app_run(struct App *app) {
 }
 
 enum AppErr app_free(struct App *app) {
+    // Pipeline.
     vkDestroyPipeline(app->device, app->pipeline, NULL);
     vkDestroyPipelineLayout(app->device, app->pipeline_layout, NULL);
+    app->pipeline_layout = VK_NULL_HANDLE;
+    app->pipeline = VK_NULL_HANDLE; 
+
+    // Render pass.
     vkDestroyRenderPass(app->device, app->render_pass, NULL);
+    app->render_pass = VK_NULL_HANDLE;
+    
+    // Image views.
     for (int i = 0; i < app->swapchain_images_n; i++)
         vkDestroyImageView(app->device, app->swapchain_image_views[i], NULL);
     free(app->swapchain_image_views);
     free(app->swapchain_images);
-    vkDestroySwapchainKHR(app->device, app->swapchain, NULL);
-    vkDestroySurfaceKHR(app->instance, app->surface, NULL);
-    vkDestroyInstance(app->instance, NULL);
-    glfwTerminate();
-
-    // Zero struct.
-    app->window = NULL;
-    app->instance = VK_NULL_HANDLE;
-    app->surface = VK_NULL_HANDLE;
-    app->device = VK_NULL_HANDLE;
-    app->graphics_queue = app->present_queue = VK_NULL_HANDLE;
-    app->swapchain = VK_NULL_HANDLE;
-    memset(&app->swapchain_format, 0, sizeof(VkFormat));
-    memset(&app->swapchain_extent, 0, sizeof(VkExtent2D));
     app->swapchain_images_n = 0;
     app->swapchain_images = NULL;
     app->swapchain_image_views = NULL;
-    app->render_pass = VK_NULL_HANDLE;
-    app->pipeline_layout = VK_NULL_HANDLE;
-    app->pipeline = VK_NULL_HANDLE;
 
+    // Swapchain.
+    vkDestroySwapchainKHR(app->device, app->swapchain, NULL);
+    app->swapchain = VK_NULL_HANDLE;
+    ZERO(app->swapchain_format);
+    ZERO(app->swapchain_extent);
+    
+    // Swapchain support details.
+    swapchain_support_details_free(&app->swapchain_support); // Zeroes itself.
+
+    // Logical device
+    vkDestroyDevice(app->device, NULL);
+    app->device = VK_NULL_HANDLE;
+    app->graphics_queue = app->present_queue = VK_NULL_HANDLE;
+
+    // Surface.
+    vkDestroySurfaceKHR(app->instance, app->surface, NULL);
+    app->surface = VK_NULL_HANDLE;
+
+    // Instance.
+    vkDestroyInstance(app->instance, NULL);
+    app->instance = VK_NULL_HANDLE;
+
+    // Window.
+    glfwDestroyWindow(app->window);
+    app->window = NULL;
+
+    // GLFW.
+    glfwTerminate();
+    
     return AppErr_None;
 }
 
 // Returns the first extension that does not match, or -1 on success.
-int verify_extensions(uint32_t extensions_n, const char **extensions) {
+int verify_instance_extensions(uint32_t extensions_n, const char **extensions) {
     // Get number of available extensions.
     uint32_t available_extensions_n;
     vkEnumerateInstanceExtensionProperties(NULL, &available_extensions_n, NULL);
@@ -218,7 +252,7 @@ continue_outer:;
 }
 
 // Returns the first layer that does not match, or -1 on success.
-int verify_validation_layers(uint32_t layers_n, const char **layers) {
+int verify_instance_validation_layers(uint32_t layers_n, const char **layers) {
     // Get number of available validation layers.
     uint32_t available_layers_n;
     vkEnumerateInstanceLayerProperties(&available_layers_n, NULL);
@@ -267,13 +301,13 @@ int create_vk_instance(VkInstance *instance) {
     //
     uint32_t glfw_extensions_n = 0;
     const char** glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extensions_n);
-    int verify_ext_result = verify_extensions(glfw_extensions_n, glfw_extensions);
+    int verify_ext_result = verify_instance_extensions(glfw_extensions_n, glfw_extensions);
     if (verify_ext_result != -1) return 2;
 
     //
-    const char *validation_layers[] = { };
+    const char *validation_layers[] = { "VK_LAYER_KHRONOS_validation" };
     int validation_layers_n = sizeof(validation_layers) / sizeof(*validation_layers);
-    int verify_vl_result = verify_validation_layers(validation_layers_n, validation_layers);
+    int verify_vl_result = verify_instance_validation_layers(validation_layers_n, validation_layers);
     if (verify_vl_result != -1) return 3;
 
     //
@@ -319,7 +353,6 @@ int find_present_queue_family(
     return 2;
 }
 
-
 int find_graphics_queue_family(VkPhysicalDevice device, uint32_t *graphics_queue_family) {
     if (device == VK_NULL_HANDLE) return 1;
     if (graphics_queue_family == NULL) return 1;
@@ -346,6 +379,39 @@ int find_graphics_queue_family(VkPhysicalDevice device, uint32_t *graphics_queue
     //
     free(queue_families);
     return (i == queue_family_n) ? 2 : 0;
+}
+
+// Returns the first extension that does not match, or -1 on success.
+int verify_device_extensions(VkPhysicalDevice physical_device, uint32_t extensions_n, const char **extensions) {
+    // Get number of available extensions.
+    uint32_t available_extensions_n;
+    vkEnumerateDeviceExtensionProperties(physical_device, NULL, &available_extensions_n, NULL);
+
+    // Get names of said extensions.
+    VkExtensionProperties *available_extensions = 
+        malloc(available_extensions_n * sizeof(*available_extensions));
+    vkEnumerateDeviceExtensionProperties(physical_device, NULL, &available_extensions_n, available_extensions);
+    
+    int i = 0;
+    for (; i < extensions_n; i += 1) {
+        // Check if extensions[i] can be found in availabie_extensions.
+        const char *i_extension = extensions[i];
+        for (int j = 0; j < available_extensions_n; j += 1) {
+            const char *j_extension = available_extensions[j].extensionName;
+            int cmp = strcmp(i_extension, j_extension);
+            if (cmp == 0) goto continue_outer;
+        }
+
+        // If we reach here, extensions[i] did not find a match.
+        break;
+continue_outer:;
+    }
+
+    //
+    free(available_extensions);
+    
+    //
+    return i < extensions_n ? i : -1;
 }
 
 int create_vk_device(
@@ -403,13 +469,17 @@ int create_vk_device(
 
     //
     const char *device_extensions[] = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        "VK_KHR_swapchain",
     };
+
+    //
+    int vde = verify_device_extensions(*physical_device, 1, device_extensions); 
+    if (vde > 0) return 5;
 
     VkDeviceCreateInfo device_create_info = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .pQueueCreateInfos = queue_create_infos,
-        .queueCreateInfoCount = 2,
+        .queueCreateInfoCount = *present_queue_family == *graphics_queue_family ? 1 : 2,
         .pEnabledFeatures = &device_features,
         .enabledLayerCount = 0, // deprecated
         .ppEnabledLayerNames = NULL, // deprecated
@@ -418,8 +488,8 @@ int create_vk_device(
     };
 
     //
-    int make_p_device_result = vkCreateDevice(*physical_device, &device_create_info, NULL, device);
-    if (make_p_device_result != VK_SUCCESS) return 5; // Could not create logical device.
+    int make_device_result = vkCreateDevice(*physical_device, &device_create_info, NULL, device);
+    if (make_device_result != VK_SUCCESS) return 6; // Could not create logical device.
     
     return 0;
 }
@@ -427,7 +497,8 @@ int create_vk_device(
 int create_vk_swapchain(
         VkDevice device, 
         VkPhysicalDevice physical_device, 
-        VkSurfaceKHR surface, 
+        VkSurfaceKHR surface,
+        const struct SwapchainSupportDetails *details,
         uint32_t graphics_queue_family, 
         uint32_t present_queue_family, 
         VkSwapchainKHR *swapchain, 
@@ -441,11 +512,20 @@ int create_vk_swapchain(
     if (format == NULL) return 1;
     if (extent == NULL) return 1;
 
-    // Assume this format is supported by the physical device. 
+    // Assume this format is supported.
     VkSurfaceFormatKHR surface_format = {
-        .format = VK_FORMAT_B8G8R8_SRGB,
+        .format = VK_FORMAT_B8G8R8A8_SRGB,
         .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
     };
+    /*for (int i = 0; i < details->formats_n; i++) {
+        VkSurfaceFormatKHR* format = details->formats + i;
+        int t_format = format->format == VK_FORMAT_B8G8R8A8_SRGB;
+        int t_color_space = format->colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        if (t_format && t_color_space) {
+            surface_format = *format;
+            break;
+        }
+    }*/
 
     // Assume this present mode is supported by the physical device.
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
@@ -461,9 +541,9 @@ int create_vk_swapchain(
     uint32_t queue_family_indices[] = {
         [0] = graphics_queue_family,
         [1] = present_queue_family,
-    };
-    
-    //
+    };    
+
+    // TODO: temp
     VkSurfaceCapabilitiesKHR capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &capabilities);
 
@@ -471,7 +551,7 @@ int create_vk_swapchain(
     VkSwapchainCreateInfoKHR swapchain_create_info = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = surface,
-        .minImageCount = capabilities.minImageCount + 1,
+        .minImageCount = capabilities.minImageCount,
         .imageFormat = surface_format.format,
         .imageColorSpace = surface_format.colorSpace,
         .imageExtent = *extent,
@@ -488,7 +568,11 @@ int create_vk_swapchain(
     };
 
     //
-    uint32_t make_sc_result = vkCreateSwapchainKHR(device, &swapchain_create_info, NULL, swapchain);
+    uint32_t make_sc_result = vkCreateSwapchainKHR(
+            device, 
+            &swapchain_create_info, 
+            NULL, 
+            swapchain);
     if (make_sc_result != VK_SUCCESS) return 2;
 
     //
@@ -565,6 +649,7 @@ int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render
 
     //
     VkSubpassDescription subpass_desc = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .colorAttachmentCount = 1,
         .pColorAttachments = &attachment_ref,
     };
@@ -582,6 +667,46 @@ int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render
     int make_rp_result = vkCreateRenderPass(device, &render_pass_info, NULL, render_pass);
     if (make_rp_result != VK_SUCCESS) 
         return 2;
+
+    return 0;
+}
+
+int create_shader_module(VkDevice device, const char *path, const char *name, VkShaderModule *shader_module) {
+    if (device == VK_NULL_HANDLE) return 1;
+    if (path == NULL) return 1;
+
+    // Create shader path.
+    char shader_path[256];
+    size_t l = strlen(path);
+    strncpy(shader_path, path, 256);
+    strncat(shader_path, name, 256 - l);
+
+    // Extract shader bytecode from file.
+    FILE *file = fopen(shader_path, "rb+");
+    if (file == NULL) return 2;
+    fseek(file, 0, SEEK_END);
+    int size = ftell(file);
+    rewind(file);
+    char *shader = malloc(size);
+    fread(shader, 1, size, file);
+    fclose(file);
+
+    //
+    VkShaderModuleCreateInfo shader_create_info = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = size,
+        .pCode = (const uint32_t*)shader,
+    };
+
+    //
+    uint32_t make_shader_result = vkCreateShaderModule(
+            device, 
+            &shader_create_info, 
+            NULL, 
+            shader_module);
+    free(shader);
+    if (make_shader_result != VK_SUCCESS)
+        return 3;
 
     return 0;
 }
@@ -604,46 +729,38 @@ int create_graphics_pipeline(
 
     // Create two shader modules.
     VkShaderModule shader_modules[2] = { VK_NULL_HANDLE };
-    char *shader_names[] = {
-        "tri.vert.spv",
-        "tri.frag.spv",
-    };
-    for (int i = 0; i < 2; i++) {
-        // Create shader path.
-        char shader_path[256];
-        strcpy(shader_path, path);
-        strcat(shader_path, shader_names[i]);
-
-        // Extract shader bytecode from file.
-        FILE *file = fopen(shader_path, "r");
-        if (file == NULL) return 2;
-        fseek(file, 0, SEEK_END);
-        int size = ftell(file);
-        rewind(file);
-        char *shader = malloc(size);
-        fgets(shader, size, file);
-        fclose(file);
-
-        //
-        VkShaderModuleCreateInfo shader_create_info = {
-            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .codeSize = size,
-            .pCode = (uint32_t*)shader,
-        };
-
-        //
-        uint32_t make_shader_result = vkCreateShaderModule(device, &shader_create_info, NULL, shader_modules + i);
-        if (make_shader_result != VK_SUCCESS) {
-            res = 4;
-            goto fail;
-        }
+    int r1 = create_shader_module(device, path, "tri.vert.spv", shader_modules + 0);
+    int r2 = create_shader_module(device, path, "tri.frag.spv", shader_modules + 1);
+    if (r1 > 0 || r2 > 0) {
+        res = 2;
+        goto fail;
     }
 
-    // 
+    // Create both shader stages.
+    VkPipelineShaderStageCreateInfo shader_stage_create_infos[2] = {
+        [0] = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = shader_modules[0],
+            .pName = "main",
+            .pSpecializationInfo = NULL,
+        },
+        [1] = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = shader_modules[1],
+            .pName = "main",
+            .pSpecializationInfo = NULL,
+        },
+    };
+
+    // Pipeline input create info. 
     VkPipelineVertexInputStateCreateInfo vertex_input_create_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount = 0,
+        .pVertexBindingDescriptions = NULL,
         .vertexAttributeDescriptionCount = 0,
+        .pVertexAttributeDescriptions = NULL,
     };
 
     //
@@ -655,12 +772,12 @@ int create_graphics_pipeline(
 
     //
     VkViewport viewport = {
-        .x = 0.0,
-        .y = 0.0,
-        .width = 800,
-        .height = 600,
-        .minDepth = 0.0,
-        .maxDepth = 1.0,
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = 800.0f,
+        .height = 600.0f,
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
     };
 
     //
@@ -684,15 +801,14 @@ int create_graphics_pipeline(
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .lineWidth = 1.0,
+        .lineWidth = 1.0f,
         .cullMode = VK_CULL_MODE_BACK_BIT,
         .frontFace = VK_FRONT_FACE_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
     };
 
     //
-    /*
-     * VkPipelineMultisampleStateCreateInfo multisample_create_info = {
+    VkPipelineMultisampleStateCreateInfo multisample_create_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .sampleShadingEnable = VK_FALSE,
         .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
@@ -700,7 +816,11 @@ int create_graphics_pipeline(
 
     //
     VkPipelineColorBlendAttachmentState color_blend_state = {
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        .colorWriteMask = 
+            VK_COLOR_COMPONENT_R_BIT 
+            | VK_COLOR_COMPONENT_G_BIT 
+            | VK_COLOR_COMPONENT_B_BIT 
+            | VK_COLOR_COMPONENT_A_BIT,
         .blendEnable = VK_FALSE,
     };
     VkPipelineColorBlendStateCreateInfo color_blend_state_create_info = {
@@ -709,15 +829,16 @@ int create_graphics_pipeline(
         .attachmentCount = 1,
         .pAttachments = &color_blend_state,
     };
-    */
 
     //
     VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 0,
+        .pushConstantRangeCount = 0,
     };
     int make_pl_result = vkCreatePipelineLayout(device, &pipeline_layout_create_info, NULL, pipeline_layout);
     if (make_pl_result != VK_SUCCESS) {
-        res = 2;
+        res = 3;
         goto fail;
     }
 
@@ -725,14 +846,14 @@ int create_graphics_pipeline(
     VkGraphicsPipelineCreateInfo pipeline_create_info = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .stageCount = 2,
-        //.pStages = 
+        .pStages = shader_stage_create_infos,
         .pVertexInputState = &vertex_input_create_info,
         .pInputAssemblyState = &input_assembly_create_info,
         .pViewportState = &viewport_state_create_info,
         .pRasterizationState = &rasterization_create_info,
-        .pMultisampleState = NULL,
+        .pMultisampleState = &multisample_create_info,
         .pDepthStencilState = NULL,
-        .pColorBlendState = NULL, 
+        .pColorBlendState = &color_blend_state_create_info, 
         .pDynamicState = NULL,
         .layout = *pipeline_layout,
         .renderPass = render_pass,
@@ -744,18 +865,14 @@ int create_graphics_pipeline(
     //
     int make_pipeline_result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_create_info, NULL, pipeline);
     if (make_pipeline_result != VK_SUCCESS) {
-        res = 3;
+        const char *out = vk_result_to_string(make_pipeline_result);
+        printf("%s\n", out);
+        res = 4;
         goto fail;
     }
 
-    return res;
 fail:
-    vkDestroyPipeline(device, *pipeline, NULL);
-    vkDestroyPipelineLayout(device, *pipeline_layout, NULL);
     vkDestroyShaderModule(device, shader_modules[0], NULL);
     vkDestroyShaderModule(device, shader_modules[1], NULL);
-    *pipeline = VK_NULL_HANDLE; 
-    *pipeline_layout = VK_NULL_HANDLE;
     return res;
 }
-

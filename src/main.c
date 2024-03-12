@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <string.h>
+#include "util.h"
 #include "app.h"
 
 char *next_dir(char *str) {
@@ -36,7 +37,7 @@ int main(int argc, char *argv[]) {
 
     err = app_init(&app, path);
     if (err != AppErr_None) {
-        printf("%i\n", err);
+        printf("AppErr: %i\n", err);
         return -1;
     }
 
@@ -45,5 +46,5 @@ int main(int argc, char *argv[]) {
 
     err = app_free(&app);
     assert(err == AppErr_None);
-    assert(app_is_init(&app) == 0);
+    assert(memcheck(&app, 0, sizeof(app)) == 1);
 }
