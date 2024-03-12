@@ -3,12 +3,12 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <stdio.h>
+#include <assert.h>
+
 #include "app.h"
 #include "util.h"
-
-#include <stdio.h>
-#include <vulkan/vulkan_core.h>
-#include <assert.h>
 
 int create_vk_instance(VkInstance *instance);
 int create_vk_device(
@@ -53,18 +53,26 @@ int create_graphics_pipeline(
         const char * const path, 
         VkPipelineLayout *pipeline_layout, 
         VkPipeline *pipeline);
+int create_framebuffers(
+        VkDevice device,
+        VkRenderPass render_pass,
+        VkExtent2D extent,
+        uint32_t n,
+        VkImageView *image_views,
+        VkFramebuffer **framebuffers);
 
 enum AppErr app_init(struct App *app, const char *path) {
-    int result = 0; // Generic int for returns.
-
+#if DEBUG
     // Check inputs.
     if (app == NULL || path == NULL)
         return AppErr_InvalidInput;
 
     // Check if app is zeroed.
-    if (!memcheck(app, 0, sizeof(*app))) {
+    if (!IS_ZERO_PTR(app))
         return AppErr_NotUninit;
-    }
+#endif
+
+    int result = 0; // Generic int for returns.
    
     // Set up GLFW.
     int glfw_status = glfwInit();
@@ -73,18 +81,15 @@ enum AppErr app_init(struct App *app, const char *path) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     app->window = glfwCreateWindow(800, 600, "Raytrace", NULL, NULL);
-    if (app->window == NULL)
-        return AppErr_InitWindowErr;
+    if (app->window == NULL) return AppErr_InitWindowErr;
 
     // Create vulkan instance
     result = create_vk_instance(&app->instance);
-    if (result > 0)
-        return AppErr_InitVkInstanceErr;
+    if (result > 0) return AppErr_InitVkInstanceErr;
 
     // Create vulkan surface though GLFW.
     result = glfwCreateWindowSurface(app->instance, app->window, NULL, &app->surface);
-    if (result > 0)
-        return AppErr_InitVkSurfaceErr;
+    if (result > 0) return AppErr_InitVkSurfaceErr;
 
     // Create vulkan device.
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -97,8 +102,7 @@ enum AppErr app_init(struct App *app, const char *path) {
             &app->device, 
             &graphics_queue_family, 
             &present_queue_family);
-    if (result > 0)
-        return AppErr_InitVkDeviceErr;
+    if (result > 0) return AppErr_InitVkDeviceErr;
     
     // Extract vk queues.
     vkGetDeviceQueue(app->device, graphics_queue_family, 0, &app->graphics_queue);
@@ -119,8 +123,7 @@ enum AppErr app_init(struct App *app, const char *path) {
             &app->swapchain, 
             &app->swapchain_format, 
             &app->swapchain_extent);
-    if (result > 0)
-        return AppErr_InitVkSwapchainErr;
+    if (result > 0) return AppErr_InitVkSwapchainErr;
 
     // Extract swapchain images.
     vkGetSwapchainImagesKHR(app->device, app->swapchain, &app->swapchain_images_n, NULL);
@@ -137,23 +140,30 @@ enum AppErr app_init(struct App *app, const char *path) {
             app->swapchain_images, 
             app->swapchain_format, 
             app->swapchain_image_views); 
-    if (result > 0)
-        return AppErr_InitVkImageViewErr; 
+    if (result > 0) return AppErr_InitVkImageViewErr; 
     
     // Create render pass.
     result = create_vk_render_pass(app->device, app->swapchain_format, &app->render_pass);
-    if (result > 0)
-        return AppErr_InitVkRenderPassErr;
+    if (result > 0) return AppErr_InitVkRenderPassErr;
 
-    // 
+    // Create graphics pipeline. 
     result = create_graphics_pipeline(
             app->device, 
             app->render_pass, 
             path, 
             &app->pipeline_layout, 
             &app->pipeline);
-    if (result > 0)
-        return AppErr_InitVkGraphicsPipelineErr;
+    if (result > 0) return AppErr_InitVkGraphicsPipelineErr;
+
+    // Create framebuffers.
+    result = create_framebuffers(
+            app->device,
+            app->render_pass,
+            app->swapchain_extent,
+            app->swapchain_images_n,
+            app->swapchain_image_views,
+            &app->framebuffers);
+    if (result > 0) return AppErr_InitFramebuffersErr;
 
     return AppErr_None;
 }
@@ -167,6 +177,16 @@ enum AppErr app_run(struct App *app) {
 }
 
 enum AppErr app_free(struct App *app) {
+#if DEBUG
+    if (app == NULL) return AppErr_InvalidInput;
+#endif
+
+    // Framebuffers.
+    for (int i = 0; i < app->swapchain_images_n; i++)
+        vkDestroyFramebuffer(app->device, app->framebuffers[i], NULL);
+    free(app->framebuffers);
+    app->framebuffers = NULL;
+
     // Pipeline.
     vkDestroyPipeline(app->device, app->pipeline, NULL);
     vkDestroyPipelineLayout(app->device, app->pipeline_layout, NULL);
@@ -220,6 +240,13 @@ enum AppErr app_free(struct App *app) {
 
 // Returns the first extension that does not match, or -1 on success.
 int verify_instance_extensions(uint32_t extensions_n, const char **extensions) {
+#if DEBUG
+    if (extensions_n == 0) return INT_MAX;
+    if (extensions == NULL) return INT_MAX;
+    for (int i = 0; i < extensions_n; i++)
+        if (extensions[i] == NULL) return INT_MAX;
+#endif
+
     // Get number of available extensions.
     uint32_t available_extensions_n;
     vkEnumerateInstanceExtensionProperties(NULL, &available_extensions_n, NULL);
@@ -253,6 +280,13 @@ continue_outer:;
 
 // Returns the first layer that does not match, or -1 on success.
 int verify_instance_validation_layers(uint32_t layers_n, const char **layers) {
+#if DEBUG
+    if (layers_n == 0) return INT_MAX;
+    if (layers == NULL) return INT_MAX;
+    for (int i = 0; i < layers_n; i++)
+        if (layers[i] == NULL) return INT_MAX;
+#endif
+
     // Get number of available validation layers.
     uint32_t available_layers_n;
     vkEnumerateInstanceLayerProperties(&available_layers_n, NULL);
@@ -286,8 +320,10 @@ continue_outer:;
 }
 
 int create_vk_instance(VkInstance *instance) {
+#if DEBUG
     if (instance == NULL) return 1;
     if (*instance != VK_NULL_HANDLE) return 1;
+#endif
 
     VkApplicationInfo app_info = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -311,7 +347,7 @@ int create_vk_instance(VkInstance *instance) {
     if (verify_vl_result != -1) return 3;
 
     //
-    VkInstanceCreateInfo create_info = {
+    VkInstanceCreateInfo instance_cinfo = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pApplicationInfo = &app_info,
         .enabledExtensionCount = glfw_extensions_n,
@@ -321,7 +357,7 @@ int create_vk_instance(VkInstance *instance) {
     };
 
     //
-    int make_instance_result = vkCreateInstance(&create_info, NULL, instance);
+    int make_instance_result = vkCreateInstance(&instance_cinfo, NULL, instance);
     if (make_instance_result != VK_SUCCESS) return 4; // Failed to create VK instance.
 
     //
@@ -332,9 +368,11 @@ int find_present_queue_family(
         VkPhysicalDevice device, 
         VkSurfaceKHR surface, 
         uint32_t *present_queue_family) {
+#if DEBUG
     if (device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
     if (present_queue_family == NULL) return 1;
+#endif
 
     //
     uint32_t queue_families_n;
@@ -421,12 +459,14 @@ int create_vk_device(
         VkDevice *device, 
         uint32_t *graphics_queue_family, 
         uint32_t *present_queue_family) {
+#if DEBUG
     if (instance == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
     if (physical_device == NULL) return 1;
     if (*physical_device != VK_NULL_HANDLE) return 1;
     if (device == NULL) return 1;
     if (*device != VK_NULL_HANDLE) return 1;
+#endif
 
     // Take first physical device.
     uint32_t physical_devices_n;
@@ -447,7 +487,7 @@ int create_vk_device(
 
     //
     float queue_priority = 1.0;
-    VkDeviceQueueCreateInfo queue_create_infos[2] = { 
+    VkDeviceQueueCreateInfo queue_cinfos[2] = { 
         {
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .queueFamilyIndex = *graphics_queue_family,
@@ -476,9 +516,9 @@ int create_vk_device(
     int vde = verify_device_extensions(*physical_device, 1, device_extensions); 
     if (vde > 0) return 5;
 
-    VkDeviceCreateInfo device_create_info = {
+    VkDeviceCreateInfo device_cinfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pQueueCreateInfos = queue_create_infos,
+        .pQueueCreateInfos = queue_cinfos,
         .queueCreateInfoCount = *present_queue_family == *graphics_queue_family ? 1 : 2,
         .pEnabledFeatures = &device_features,
         .enabledLayerCount = 0, // deprecated
@@ -488,7 +528,7 @@ int create_vk_device(
     };
 
     //
-    int make_device_result = vkCreateDevice(*physical_device, &device_create_info, NULL, device);
+    int make_device_result = vkCreateDevice(*physical_device, &device_cinfo, NULL, device);
     if (make_device_result != VK_SUCCESS) return 6; // Could not create logical device.
     
     return 0;
@@ -504,6 +544,7 @@ int create_vk_swapchain(
         VkSwapchainKHR *swapchain, 
         VkFormat *format, 
         VkExtent2D *extent) {
+#if DEBUG
     if (device == VK_NULL_HANDLE) return 1;
     if (physical_device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
@@ -511,6 +552,7 @@ int create_vk_swapchain(
     if (*swapchain != VK_NULL_HANDLE) return 1;
     if (format == NULL) return 1;
     if (extent == NULL) return 1;
+#endif
 
     // Assume this format is supported.
     VkSurfaceFormatKHR surface_format = {
@@ -548,7 +590,7 @@ int create_vk_swapchain(
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &capabilities);
 
     //
-    VkSwapchainCreateInfoKHR swapchain_create_info = {
+    VkSwapchainCreateInfoKHR swapchain_cinfo = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = surface,
         .minImageCount = capabilities.minImageCount,
@@ -570,7 +612,7 @@ int create_vk_swapchain(
     //
     uint32_t make_sc_result = vkCreateSwapchainKHR(
             device, 
-            &swapchain_create_info, 
+            &swapchain_cinfo, 
             NULL, 
             swapchain);
     if (make_sc_result != VK_SUCCESS) return 2;
@@ -587,6 +629,7 @@ int create_vk_image_views(
         VkImage *images, 
         VkFormat format, 
         VkImageView *image_views) {
+#if DEBUG
     if (device == VK_NULL_HANDLE) return 1;
     if (images == NULL) return 1;
     if (n == 0) return 1;
@@ -594,9 +637,10 @@ int create_vk_image_views(
     for (int i = 0; i < n; i++)
         if (images[i] == VK_NULL_HANDLE || image_views[i] != VK_NULL_HANDLE)
             return 1;
+#endif
 
     for (int i = 0; i < n; i++) {
-        VkImageViewCreateInfo create_info = {
+        VkImageViewCreateInfo cinfo = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image = images[i],
             .viewType = VK_IMAGE_VIEW_TYPE_2D,
@@ -616,18 +660,19 @@ int create_vk_image_views(
             },
         };
 
-        uint32_t make_iv_result = vkCreateImageView(device, &create_info, NULL, image_views + i);
-        if (make_iv_result != VK_SUCCESS)
-            return 1;
+        uint32_t make_iv_result = vkCreateImageView(device, &cinfo, NULL, image_views + i);
+        if (make_iv_result != VK_SUCCESS) return 1;
     }
 
     return 0;
 }
 
 int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render_pass) {
+#if DEBUG
     if (device == VK_NULL_HANDLE) return 1;
     if (render_pass == NULL) return 1;
     if (*render_pass != VK_NULL_HANDLE) return 1;
+#endif
 
     //
     VkAttachmentDescription color_attachment = {
@@ -655,7 +700,7 @@ int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render
     };
 
     //
-    VkRenderPassCreateInfo render_pass_info = {
+    VkRenderPassCreateInfo render_pass_cinfo = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .attachmentCount = 1,
         .pAttachments = &color_attachment,
@@ -664,16 +709,19 @@ int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render
     };
 
     //
-    int make_rp_result = vkCreateRenderPass(device, &render_pass_info, NULL, render_pass);
-    if (make_rp_result != VK_SUCCESS) 
-        return 2;
+    int make_rp_result = vkCreateRenderPass(device, &render_pass_cinfo, NULL, render_pass);
+    if (make_rp_result != VK_SUCCESS) return 2;
 
     return 0;
 }
 
 int create_shader_module(VkDevice device, const char *path, const char *name, VkShaderModule *shader_module) {
+#if DEBUG
     if (device == VK_NULL_HANDLE) return 1;
     if (path == NULL) return 1;
+    if (shader_module == NULL) return 1;
+    if (*shader_module != VK_NULL_HANDLE) return 1;
+#endif
 
     // Create shader path.
     char shader_path[256];
@@ -692,7 +740,7 @@ int create_shader_module(VkDevice device, const char *path, const char *name, Vk
     fclose(file);
 
     //
-    VkShaderModuleCreateInfo shader_create_info = {
+    VkShaderModuleCreateInfo shader_cinfo = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = size,
         .pCode = (const uint32_t*)shader,
@@ -701,12 +749,11 @@ int create_shader_module(VkDevice device, const char *path, const char *name, Vk
     //
     uint32_t make_shader_result = vkCreateShaderModule(
             device, 
-            &shader_create_info, 
+            &shader_cinfo, 
             NULL, 
             shader_module);
     free(shader);
-    if (make_shader_result != VK_SUCCESS)
-        return 3;
+    if (make_shader_result != VK_SUCCESS) return 3;
 
     return 0;
 }
@@ -717,6 +764,7 @@ int create_graphics_pipeline(
         const char * const path, 
         VkPipelineLayout *pipeline_layout, 
         VkPipeline *pipeline) {
+#if DEBUG
     if (device == VK_NULL_HANDLE) return 1;
     if (render_pass == VK_NULL_HANDLE) return 1;
     if (path == NULL) return 1;
@@ -724,6 +772,7 @@ int create_graphics_pipeline(
     if (*pipeline_layout != VK_NULL_HANDLE) return 1;
     if (pipeline == NULL) return 1;
     if (*pipeline != VK_NULL_HANDLE) return 1;
+#endif
 
     int res = 0;
 
@@ -737,7 +786,7 @@ int create_graphics_pipeline(
     }
 
     // Create both shader stages.
-    VkPipelineShaderStageCreateInfo shader_stage_create_infos[2] = {
+    VkPipelineShaderStageCreateInfo shader_stage_cinfos[2] = {
         [0] = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_VERTEX_BIT,
@@ -755,7 +804,7 @@ int create_graphics_pipeline(
     };
 
     // Pipeline input create info. 
-    VkPipelineVertexInputStateCreateInfo vertex_input_create_info = {
+    VkPipelineVertexInputStateCreateInfo vertex_input_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount = 0,
         .pVertexBindingDescriptions = NULL,
@@ -764,7 +813,7 @@ int create_graphics_pipeline(
     };
 
     //
-    VkPipelineInputAssemblyStateCreateInfo input_assembly_create_info = {
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         .primitiveRestartEnable = VK_FALSE,
@@ -787,7 +836,7 @@ int create_graphics_pipeline(
     };
 
     //
-    VkPipelineViewportStateCreateInfo viewport_state_create_info = {
+    VkPipelineViewportStateCreateInfo viewport_state_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
         .viewportCount = 1,
         .pViewports = &viewport,
@@ -796,7 +845,7 @@ int create_graphics_pipeline(
     };
 
     //
-    VkPipelineRasterizationStateCreateInfo rasterization_create_info = {
+    VkPipelineRasterizationStateCreateInfo rasterization_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
@@ -808,7 +857,7 @@ int create_graphics_pipeline(
     };
 
     //
-    VkPipelineMultisampleStateCreateInfo multisample_create_info = {
+    VkPipelineMultisampleStateCreateInfo multisample_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .sampleShadingEnable = VK_FALSE,
         .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
@@ -823,7 +872,7 @@ int create_graphics_pipeline(
             | VK_COLOR_COMPONENT_A_BIT,
         .blendEnable = VK_FALSE,
     };
-    VkPipelineColorBlendStateCreateInfo color_blend_state_create_info = {
+    VkPipelineColorBlendStateCreateInfo color_blend_state_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .logicOpEnable = VK_FALSE,
         .attachmentCount = 1,
@@ -831,29 +880,29 @@ int create_graphics_pipeline(
     };
 
     //
-    VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
+    VkPipelineLayoutCreateInfo pipeline_layout_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 0,
         .pushConstantRangeCount = 0,
     };
-    int make_pl_result = vkCreatePipelineLayout(device, &pipeline_layout_create_info, NULL, pipeline_layout);
+    int make_pl_result = vkCreatePipelineLayout(device, &pipeline_layout_cinfo, NULL, pipeline_layout);
     if (make_pl_result != VK_SUCCESS) {
         res = 3;
         goto fail;
     }
 
     //
-    VkGraphicsPipelineCreateInfo pipeline_create_info = {
+    VkGraphicsPipelineCreateInfo pipeline_cinfo = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .stageCount = 2,
-        .pStages = shader_stage_create_infos,
-        .pVertexInputState = &vertex_input_create_info,
-        .pInputAssemblyState = &input_assembly_create_info,
-        .pViewportState = &viewport_state_create_info,
-        .pRasterizationState = &rasterization_create_info,
-        .pMultisampleState = &multisample_create_info,
+        .pStages = shader_stage_cinfos,
+        .pVertexInputState = &vertex_input_cinfo,
+        .pInputAssemblyState = &input_assembly_cinfo,
+        .pViewportState = &viewport_state_cinfo,
+        .pRasterizationState = &rasterization_cinfo,
+        .pMultisampleState = &multisample_cinfo,
         .pDepthStencilState = NULL,
-        .pColorBlendState = &color_blend_state_create_info, 
+        .pColorBlendState = &color_blend_state_cinfo, 
         .pDynamicState = NULL,
         .layout = *pipeline_layout,
         .renderPass = render_pass,
@@ -863,7 +912,7 @@ int create_graphics_pipeline(
     };
 
     //
-    int make_pipeline_result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_create_info, NULL, pipeline);
+    int make_pipeline_result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_cinfo, NULL, pipeline);
     if (make_pipeline_result != VK_SUCCESS) {
         const char *out = vk_result_to_string(make_pipeline_result);
         printf("%s\n", out);
@@ -875,4 +924,44 @@ fail:
     vkDestroyShaderModule(device, shader_modules[0], NULL);
     vkDestroyShaderModule(device, shader_modules[1], NULL);
     return res;
+}
+
+int create_framebuffers(
+        VkDevice device,
+        VkRenderPass render_pass,
+        VkExtent2D extent,
+        uint32_t n,
+        VkImageView *image_views,
+        VkFramebuffer **framebuffers) {
+#if DEBUG
+    if (device == VK_NULL_HANDLE) return 1;
+    if (render_pass == VK_NULL_HANDLE) return 1;
+    if (n == 0) return 1;
+    if (image_views == NULL) return 1;
+    for (int i = 0; i < n; i++)
+        if (image_views[i] == VK_NULL_HANDLE) return 1;
+    if (framebuffers == NULL) return 1;
+    if (*framebuffers != NULL) return 1;
+#endif
+
+    //
+    *framebuffers = calloc(n, sizeof(VkFramebuffer));
+
+    //
+    for (int i = 0; i < n; i++) {
+        VkFramebufferCreateInfo framebuffer_cinfo = {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = render_pass,
+            .attachmentCount = 1,
+            .pAttachments = image_views + i,
+            .width = extent.width,
+            .height = extent.height,
+            .layers = 1,
+        };
+
+        int create_fb_result = vkCreateFramebuffer(device, &framebuffer_cinfo, NULL, (*framebuffers) + i);
+        if (create_fb_result != VK_SUCCESS) return 2;
+    }
+
+    return 0;
 }

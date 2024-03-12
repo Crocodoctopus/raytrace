@@ -17,6 +17,7 @@ enum AppErr {
     AppErr_InitVkImageViewErr,
     AppErr_InitVkRenderPassErr,
     AppErr_InitVkGraphicsPipelineErr,
+    AppErr_InitFramebuffersErr,
 };
 
 // Reify application.
@@ -37,6 +38,7 @@ struct App {
     uint32_t swapchain_images_n;
     VkImage *swapchain_images; // array with size of swapchain_images_n
     VkImageView *swapchain_image_views; // array with size of swapchain_images_n
+    VkFramebuffer *framebuffers; // array with size of swapchain_images_n
     // Pipeline.
     VkRenderPass render_pass;
     VkPipelineLayout pipeline_layout;
