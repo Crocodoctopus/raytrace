@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define DEBUG 1
+#define DEBUG_INPUT_VALIDATION 1
 
 #define IS_ZERO(t) memcheck(&t, 0 sizeof(t))
 #define IS_ZERO_PTR(t) memcheck(t, 0, sizeof(*t))

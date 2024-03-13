@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <assert.h>
+#include <vulkan/vulkan_core.h>
 
 #include "app.h"
 #include "util.h"
@@ -60,9 +61,14 @@ int create_framebuffers(
         uint32_t n,
         VkImageView *image_views,
         VkFramebuffer **framebuffers);
+int create_command_pool(
+        VkDevice device, 
+        uint32_t graphics_queue_family, 
+        VkCommandPool *command_pool, 
+        VkCommandBuffer *command_buffer);
 
 enum AppErr app_init(struct App *app, const char *path) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     // Check inputs.
     if (app == NULL || path == NULL)
         return AppErr_InvalidInput;
@@ -165,6 +171,14 @@ enum AppErr app_init(struct App *app, const char *path) {
             &app->framebuffers);
     if (result > 0) return AppErr_InitFramebuffersErr;
 
+    //
+    result = create_command_pool(
+            app->device,
+            graphics_queue_family,
+            &app->command_pool,
+            &app->command_buffer);
+    if (result > 0) return AppErr_InitCommandPoolErr;
+
     return AppErr_None;
 }
 
@@ -177,9 +191,14 @@ enum AppErr app_run(struct App *app) {
 }
 
 enum AppErr app_free(struct App *app) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (app == NULL) return AppErr_InvalidInput;
 #endif
+
+    // Command pool.
+    vkDestroyCommandPool(app->device, app->command_pool, NULL);
+    app->command_pool = VK_NULL_HANDLE;
+    app->command_buffer = VK_NULL_HANDLE;
 
     // Framebuffers.
     for (int i = 0; i < app->swapchain_images_n; i++)
@@ -218,7 +237,8 @@ enum AppErr app_free(struct App *app) {
     // Logical device
     vkDestroyDevice(app->device, NULL);
     app->device = VK_NULL_HANDLE;
-    app->graphics_queue = app->present_queue = VK_NULL_HANDLE;
+    app->graphics_queue = VK_NULL_HANDLE;
+    app->present_queue = VK_NULL_HANDLE;
 
     // Surface.
     vkDestroySurfaceKHR(app->instance, app->surface, NULL);
@@ -240,7 +260,7 @@ enum AppErr app_free(struct App *app) {
 
 // Returns the first extension that does not match, or -1 on success.
 int verify_instance_extensions(uint32_t extensions_n, const char **extensions) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (extensions_n == 0) return INT_MAX;
     if (extensions == NULL) return INT_MAX;
     for (int i = 0; i < extensions_n; i++)
@@ -280,7 +300,7 @@ continue_outer:;
 
 // Returns the first layer that does not match, or -1 on success.
 int verify_instance_validation_layers(uint32_t layers_n, const char **layers) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (layers_n == 0) return INT_MAX;
     if (layers == NULL) return INT_MAX;
     for (int i = 0; i < layers_n; i++)
@@ -320,7 +340,7 @@ continue_outer:;
 }
 
 int create_vk_instance(VkInstance *instance) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (instance == NULL) return 1;
     if (*instance != VK_NULL_HANDLE) return 1;
 #endif
@@ -368,7 +388,7 @@ int find_present_queue_family(
         VkPhysicalDevice device, 
         VkSurfaceKHR surface, 
         uint32_t *present_queue_family) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
     if (present_queue_family == NULL) return 1;
@@ -459,7 +479,7 @@ int create_vk_device(
         VkDevice *device, 
         uint32_t *graphics_queue_family, 
         uint32_t *present_queue_family) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (instance == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
     if (physical_device == NULL) return 1;
@@ -544,7 +564,7 @@ int create_vk_swapchain(
         VkSwapchainKHR *swapchain, 
         VkFormat *format, 
         VkExtent2D *extent) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
     if (physical_device == VK_NULL_HANDLE) return 1;
     if (surface == VK_NULL_HANDLE) return 1;
@@ -629,7 +649,7 @@ int create_vk_image_views(
         VkImage *images, 
         VkFormat format, 
         VkImageView *image_views) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
     if (images == NULL) return 1;
     if (n == 0) return 1;
@@ -668,7 +688,7 @@ int create_vk_image_views(
 }
 
 int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render_pass) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
     if (render_pass == NULL) return 1;
     if (*render_pass != VK_NULL_HANDLE) return 1;
@@ -716,7 +736,7 @@ int create_vk_render_pass(VkDevice device, VkFormat format, VkRenderPass *render
 }
 
 int create_shader_module(VkDevice device, const char *path, const char *name, VkShaderModule *shader_module) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
     if (path == NULL) return 1;
     if (shader_module == NULL) return 1;
@@ -764,7 +784,7 @@ int create_graphics_pipeline(
         const char * const path, 
         VkPipelineLayout *pipeline_layout, 
         VkPipeline *pipeline) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
     if (render_pass == VK_NULL_HANDLE) return 1;
     if (path == NULL) return 1;
@@ -933,7 +953,7 @@ int create_framebuffers(
         uint32_t n,
         VkImageView *image_views,
         VkFramebuffer **framebuffers) {
-#if DEBUG
+#if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
     if (render_pass == VK_NULL_HANDLE) return 1;
     if (n == 0) return 1;
@@ -962,6 +982,44 @@ int create_framebuffers(
         int create_fb_result = vkCreateFramebuffer(device, &framebuffer_cinfo, NULL, (*framebuffers) + i);
         if (create_fb_result != VK_SUCCESS) return 2;
     }
+
+    return 0;
+}
+
+int create_command_pool(
+        VkDevice device, 
+        uint32_t graphics_queue_family, 
+        VkCommandPool *command_pool, 
+        VkCommandBuffer *command_buffer) {
+#if DEBUG_INPUT_VALIDATION
+    if (device == VK_NULL_HANDLE) return 1;
+    if (graphics_queue_family == UINT32_MAX) return 1;
+    if (command_pool == NULL) return 1;
+    if (*command_pool != VK_NULL_HANDLE) return 1;
+    if (command_buffer == NULL) return 1;
+    if (*command_buffer != VK_NULL_HANDLE) return 1;
+#endif
+
+    int result = 0;
+
+    VkCommandPoolCreateInfo pool_cinfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = graphics_queue_family,
+    };
+
+    result = vkCreateCommandPool(device, &pool_cinfo, NULL, command_pool);
+    if (result != VK_SUCCESS) return 2;
+
+    VkCommandBufferAllocateInfo buffer_cinfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = *command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+
+    result = vkAllocateCommandBuffers(device, &buffer_cinfo, command_buffer);
+    if (result != VK_SUCCESS) return 3;
 
     return 0;
 }

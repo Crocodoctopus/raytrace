@@ -18,6 +18,7 @@ enum AppErr {
     AppErr_InitVkRenderPassErr,
     AppErr_InitVkGraphicsPipelineErr,
     AppErr_InitFramebuffersErr,
+    AppErr_InitCommandPoolErr,
 };
 
 // Reify application.
@@ -43,6 +44,9 @@ struct App {
     VkRenderPass render_pass;
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
+    // Command pool.
+    VkCommandPool command_pool;
+    VkCommandBuffer command_buffer;
 };
 
 enum AppErr app_init(struct App *app, const char * const path);
