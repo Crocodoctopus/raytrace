@@ -30,7 +30,7 @@ struct App {
     VkSurfaceKHR surface;
     VkDevice device;
     VkQueue graphics_queue, present_queue;
-    // Device swap chain support.
+    // Device swapchain support.
     struct SwapchainSupportDetails swapchain_support;
     // Swapchain.
     VkSwapchainKHR swapchain;
@@ -39,14 +39,16 @@ struct App {
     uint32_t swapchain_images_n;
     VkImage *swapchain_images; // array with size of swapchain_images_n
     VkImageView *swapchain_image_views; // array with size of swapchain_images_n
-    VkFramebuffer *framebuffers; // array with size of swapchain_images_n
     // Pipeline.
-    VkRenderPass render_pass;
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
     // Command pool.
     VkCommandPool command_pool;
     VkCommandBuffer command_buffer;
+    // Syncronization.
+    VkSemaphore image_available;
+    VkSemaphore render_finished;
+    VkFence in_flight;
 };
 
 enum AppErr app_init(struct App *app, const char * const path);

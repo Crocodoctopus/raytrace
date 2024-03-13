@@ -50,8 +50,8 @@ int create_shader_modules(
         VkShaderModule *shader_modules);
 int create_graphics_pipeline(
         VkDevice device, 
-        VkRenderPass render_pass, 
         const char * const path, 
+        VkFormat *swapchain_format,
         VkPipelineLayout *pipeline_layout, 
         VkPipeline *pipeline);
 int create_framebuffers(
@@ -66,6 +66,7 @@ int create_command_pool(
         uint32_t graphics_queue_family, 
         VkCommandPool *command_pool, 
         VkCommandBuffer *command_buffer);
+int draw(struct App *app); // TODO
 
 enum AppErr app_init(struct App *app, const char *path) {
 #if DEBUG_INPUT_VALIDATION
@@ -147,31 +148,17 @@ enum AppErr app_init(struct App *app, const char *path) {
             app->swapchain_format, 
             app->swapchain_image_views); 
     if (result > 0) return AppErr_InitVkImageViewErr; 
-    
-    // Create render pass.
-    result = create_vk_render_pass(app->device, app->swapchain_format, &app->render_pass);
-    if (result > 0) return AppErr_InitVkRenderPassErr;
 
     // Create graphics pipeline. 
     result = create_graphics_pipeline(
             app->device, 
-            app->render_pass, 
-            path, 
+            path,
+            &app->swapchain_format,
             &app->pipeline_layout, 
             &app->pipeline);
     if (result > 0) return AppErr_InitVkGraphicsPipelineErr;
 
-    // Create framebuffers.
-    result = create_framebuffers(
-            app->device,
-            app->render_pass,
-            app->swapchain_extent,
-            app->swapchain_images_n,
-            app->swapchain_image_views,
-            &app->framebuffers);
-    if (result > 0) return AppErr_InitFramebuffersErr;
-
-    //
+    // Create command pool and alloc command buffer.
     result = create_command_pool(
             app->device,
             graphics_queue_family,
@@ -179,13 +166,30 @@ enum AppErr app_init(struct App *app, const char *path) {
             &app->command_buffer);
     if (result > 0) return AppErr_InitCommandPoolErr;
 
+    // Create sync objects. (TODO: error check this?)
+    VkSemaphoreCreateInfo semaphore_cinfo = { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+    vkCreateSemaphore(app->device, &semaphore_cinfo, NULL, &app->image_available);
+    vkCreateSemaphore(app->device, &semaphore_cinfo, NULL, &app->render_finished);
+    VkFenceCreateInfo fence_cinfo = { 
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+    };
+    vkCreateFence(app->device, &fence_cinfo, NULL, &app->in_flight);
+
     return AppErr_None;
 }
 
 enum AppErr app_run(struct App *app) {
     while(!glfwWindowShouldClose(app->window)) {
         glfwPollEvents();
+
+        // Draw.
+        int i = draw(app);
+        if (i > 0) return AppErr_Unspecified;
     }
+    
+    // Wait for the device to finish.
+    vkDeviceWaitIdle(app->device);
 
     return AppErr_None;
 }
@@ -195,26 +199,24 @@ enum AppErr app_free(struct App *app) {
     if (app == NULL) return AppErr_InvalidInput;
 #endif
 
+    // Syncronization.
+    vkDestroySemaphore(app->device, app->image_available, NULL);
+    vkDestroySemaphore(app->device, app->render_finished, NULL);
+    vkDestroyFence(app->device, app->in_flight, NULL);
+    app->image_available = VK_NULL_HANDLE;
+    app->render_finished = VK_NULL_HANDLE;
+    app->in_flight = VK_NULL_HANDLE;
+
     // Command pool.
     vkDestroyCommandPool(app->device, app->command_pool, NULL);
     app->command_pool = VK_NULL_HANDLE;
     app->command_buffer = VK_NULL_HANDLE;
-
-    // Framebuffers.
-    for (int i = 0; i < app->swapchain_images_n; i++)
-        vkDestroyFramebuffer(app->device, app->framebuffers[i], NULL);
-    free(app->framebuffers);
-    app->framebuffers = NULL;
 
     // Pipeline.
     vkDestroyPipeline(app->device, app->pipeline, NULL);
     vkDestroyPipelineLayout(app->device, app->pipeline_layout, NULL);
     app->pipeline_layout = VK_NULL_HANDLE;
     app->pipeline = VK_NULL_HANDLE; 
-
-    // Render pass.
-    vkDestroyRenderPass(app->device, app->render_pass, NULL);
-    app->render_pass = VK_NULL_HANDLE;
     
     // Image views.
     for (int i = 0; i < app->swapchain_images_n; i++)
@@ -351,7 +353,7 @@ int create_vk_instance(VkInstance *instance) {
         .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
         .pEngineName = "None",
         .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = VK_API_VERSION_1_0,
+        .apiVersion = VK_API_VERSION_1_3,
     };
    
     //
@@ -530,20 +532,26 @@ int create_vk_device(
     //
     const char *device_extensions[] = {
         "VK_KHR_swapchain",
+        "VK_KHR_dynamic_rendering",
     };
+    const int device_extensions_n = sizeof(device_extensions) / sizeof(*device_extensions);
 
     //
-    int vde = verify_device_extensions(*physical_device, 1, device_extensions); 
+    int vde = verify_device_extensions(*physical_device, device_extensions_n, device_extensions);
     if (vde > 0) return 5;
+
+    const VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
+        .dynamicRendering = VK_TRUE,
+    };
 
     VkDeviceCreateInfo device_cinfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = &dynamic_rendering_features,
         .pQueueCreateInfos = queue_cinfos,
         .queueCreateInfoCount = *present_queue_family == *graphics_queue_family ? 1 : 2,
         .pEnabledFeatures = &device_features,
-        .enabledLayerCount = 0, // deprecated
-        .ppEnabledLayerNames = NULL, // deprecated
-        .enabledExtensionCount = 1,
+        .enabledExtensionCount = device_extensions_n,
         .ppEnabledExtensionNames = device_extensions,
     };
 
@@ -780,13 +788,12 @@ int create_shader_module(VkDevice device, const char *path, const char *name, Vk
 
 int create_graphics_pipeline(
         VkDevice device, 
-        VkRenderPass render_pass, 
-        const char * const path, 
+        const char * const path,
+        VkFormat *swapchain_format,
         VkPipelineLayout *pipeline_layout, 
         VkPipeline *pipeline) {
 #if DEBUG_INPUT_VALIDATION
     if (device == VK_NULL_HANDLE) return 1;
-    if (render_pass == VK_NULL_HANDLE) return 1;
     if (path == NULL) return 1;
     if (pipeline_layout == NULL) return 1;
     if (*pipeline_layout != VK_NULL_HANDLE) return 1;
@@ -911,9 +918,16 @@ int create_graphics_pipeline(
         goto fail;
     }
 
+    VkPipelineRenderingCreateInfo pipeline_rendering_cinfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = swapchain_format,
+    };
+
     //
     VkGraphicsPipelineCreateInfo pipeline_cinfo = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &pipeline_rendering_cinfo,
         .stageCount = 2,
         .pStages = shader_stage_cinfos,
         .pVertexInputState = &vertex_input_cinfo,
@@ -925,7 +939,7 @@ int create_graphics_pipeline(
         .pColorBlendState = &color_blend_state_cinfo, 
         .pDynamicState = NULL,
         .layout = *pipeline_layout,
-        .renderPass = render_pass,
+        .renderPass = VK_NULL_HANDLE,
         .subpass = 0,
         .basePipelineHandle = VK_NULL_HANDLE,
         .basePipelineIndex = -1,
@@ -1020,6 +1034,150 @@ int create_command_pool(
 
     result = vkAllocateCommandBuffers(device, &buffer_cinfo, command_buffer);
     if (result != VK_SUCCESS) return 3;
+
+    return 0;
+}
+
+// Lazy copout
+int draw(struct App *app) {
+#if DEBUG_INPUT_VALIDATION
+    if (app == NULL) return 1;
+#endif
+
+    VkResult result = VK_RESULT_MAX_ENUM;
+
+    // Wait for signal that rendering is finished.
+    vkWaitForFences(app->device, 1, &app->in_flight, VK_TRUE, UINT64_MAX);
+    vkResetFences(app->device, 1, &app->in_flight);
+
+    // Aquire next swapchain image.
+    uint32_t img_index = 0;
+    vkAcquireNextImageKHR(app->device, app->swapchain, UINT64_MAX, app->image_available, VK_NULL_HANDLE, &img_index);
+    
+    // Reset command buffer for pushing.
+    vkResetCommandBuffer(app->command_buffer, 0);
+
+    // The next lines just submit commands to the command buffer.
+    VkCommandBufferBeginInfo command_buffer_begin_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = 0,
+        .pInheritanceInfo = NULL,
+    };
+
+    result = vkBeginCommandBuffer(app->command_buffer, &command_buffer_begin_info);
+    if (result != VK_SUCCESS) return 2;
+
+    const VkImageMemoryBarrier imb = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .image = app->swapchain_images[img_index],
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+
+    vkCmdPipelineBarrier(
+            app->command_buffer,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0,
+            0,
+            NULL,
+            0,
+            NULL,
+            1,
+            &imb);
+
+    const VkRenderingAttachmentInfo attachment_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = app->swapchain_image_views[img_index],
+        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = {{{ 0.0f, 0.0f, 0.0f, 1.0f }}},
+    };
+    const VkRenderingInfo rendering_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = {
+            .offset = { 0, 0 },
+            .extent = app->swapchain_extent,
+        },
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &attachment_info,
+    }; 
+    vkCmdBeginRendering(app->command_buffer, &rendering_info);
+    vkCmdBindPipeline(app->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->pipeline);
+    vkCmdDraw(app->command_buffer, 3, 1, 0, 0);
+    vkCmdEndRendering(app->command_buffer);
+
+    const VkImageMemoryBarrier imb2 = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .image = app->swapchain_images[img_index],
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+
+    vkCmdPipelineBarrier(
+            app->command_buffer,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0,
+            0,
+            NULL,
+            0,
+            NULL,
+            1,
+            &imb2);
+
+    // vkCmdSetViewport
+    // vkCmdSetScissor
+
+    result = vkEndCommandBuffer(app->command_buffer);
+    if (result != VK_SUCCESS) return 3;
+
+    // Submit command buffer.
+    VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    VkSubmitInfo submit_info = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &app->image_available,
+        .pWaitDstStageMask = wait_stages, 
+        .commandBufferCount = 1,
+        .pCommandBuffers = &app->command_buffer,
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &app->render_finished,
+    };
+
+    result = vkQueueSubmit(app->graphics_queue, 1, &submit_info, app->in_flight);
+    if (result != VK_SUCCESS) return 4;
+
+    // Present?
+    VkPresentInfoKHR present_info = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &app->render_finished,
+        .swapchainCount = 1,
+        .pSwapchains = &app->swapchain,
+        .pImageIndices = &img_index,
+        .pResults = NULL,
+    };
+
+    vkQueuePresentKHR(app->present_queue, &present_info);
 
     return 0;
 }

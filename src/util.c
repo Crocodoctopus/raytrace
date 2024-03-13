@@ -3,9 +3,7 @@
 int memcheck(void *ptr, uint8_t val, size_t len) { 
     uint8_t *m = ptr;
     for (int i = 0; i < len; i++)
-        if (m[i] != val) return 0;
-    //while (len-- > 0)
-    //    if (m[len] != val) return 0;
+        if (m[i] != val) return 0;  
     return 1;
 }
 
