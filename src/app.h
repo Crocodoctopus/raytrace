@@ -42,6 +42,9 @@ struct App {
     // Pipeline.
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
+    // Buffers.
+    VkBuffer vert_pos;
+    VkBuffer vert_color;
     // Command pool.
     VkCommandPool command_pool;
     VkCommandBuffer command_buffer;

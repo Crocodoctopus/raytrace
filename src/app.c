@@ -54,6 +54,7 @@ int create_graphics_pipeline(
         VkFormat *swapchain_format,
         VkPipelineLayout *pipeline_layout, 
         VkPipeline *pipeline);
+int create_vertex_buffer(VkDevice device, size_t size, VkBuffer *buffer);
 int create_framebuffers(
         VkDevice device,
         VkRenderPass render_pass,
@@ -212,12 +213,16 @@ enum AppErr app_free(struct App *app) {
     app->command_pool = VK_NULL_HANDLE;
     app->command_buffer = VK_NULL_HANDLE;
 
+    // Buffers.
+    vkDestroyBuffer(app->device, app->vert_pos, NULL);
+    vkDestroyBuffer(app->device, app->vert_color, NULL);
+
     // Pipeline.
     vkDestroyPipeline(app->device, app->pipeline, NULL);
     vkDestroyPipelineLayout(app->device, app->pipeline_layout, NULL);
     app->pipeline_layout = VK_NULL_HANDLE;
     app->pipeline = VK_NULL_HANDLE; 
-    
+
     // Image views.
     for (int i = 0; i < app->swapchain_images_n; i++)
         vkDestroyImageView(app->device, app->swapchain_image_views[i], NULL);
@@ -830,13 +835,41 @@ int create_graphics_pipeline(
         },
     };
 
+    //
+    const VkVertexInputBindingDescription vertex_input_binding_descs[] = {
+        {
+            .binding = 0,
+            .stride = 2 * sizeof(float),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+        },
+        {
+            .binding = 1,
+            .stride = 3 * sizeof(float),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+        }
+    };
+
+    // 
+    VkVertexInputAttributeDescription vertex_input_attribute_descs[] = {
+        {
+            .binding = 0,
+            .location = 0,
+            .format = VK_FORMAT_R32G32_SFLOAT,
+        },
+        {
+            .binding = 1,
+            .location = 1,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+        }
+    };
+    
     // Pipeline input create info. 
     VkPipelineVertexInputStateCreateInfo vertex_input_cinfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .vertexBindingDescriptionCount = 0,
-        .pVertexBindingDescriptions = NULL,
-        .vertexAttributeDescriptionCount = 0,
-        .pVertexAttributeDescriptions = NULL,
+        .vertexBindingDescriptionCount = 2,
+        .pVertexBindingDescriptions = vertex_input_binding_descs,
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = vertex_input_attribute_descs,
     };
 
     //
@@ -958,6 +991,26 @@ fail:
     vkDestroyShaderModule(device, shader_modules[0], NULL);
     vkDestroyShaderModule(device, shader_modules[1], NULL);
     return res;
+}
+
+int create_vertex_buffer(VkDevice device, size_t size, VkBuffer *buffer) {
+#if DEBUG_INPUT_VALIDATION
+    if (device == VK_NULL_HANDLE) return 1;
+    if (size == 0) return 1;
+    if (buffer == NULL) return 1;
+    if (*buffer != VK_NULL_HANDLE) return 1;
+#endif
+    VkBufferCreateInfo buffer_cinfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+
+    VkResult result = vkCreateBuffer(device, &buffer_cinfo, NULL, buffer);
+    if (result != VK_SUCCESS) return 2;
+
+    return 0;
 }
 
 int create_framebuffers(
